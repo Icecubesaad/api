@@ -651,11 +651,14 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
       });
       
       let uploadId = data.uploadId;
+      let upload = null;
       
       // If no uploadId provided, find the most recent PDF upload for this project
       if (!uploadId) {
         this.logger.log(`No uploadId provided, searching for recent PDF uploads...`);
-        const recentUpload = await this.db.upload.findFirst({
+        
+        // First try with userId
+        upload = await this.db.upload.findFirst({
           where: {
             projectId: data.projectId,
             userId: data.userId,
@@ -664,24 +667,58 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
           orderBy: { createdAt: 'desc' },
         });
         
-        if (!recentUpload) {
-          this.logger.error(`No recent PDF upload found for project ${data.projectId}, user ${data.userId}`);
+        // If not found, try without userId (in case of mismatch)
+        if (!upload) {
+          this.logger.log(`No upload found with userId, trying without userId filter...`);
+          upload = await this.db.upload.findFirst({
+            where: {
+              projectId: data.projectId,
+              mime: 'application/pdf',
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+        }
+        
+        // If still not found, try to find ANY recent PDF upload
+        if (!upload) {
+          this.logger.log(`No upload found for project, trying to find any recent PDF...`);
+          upload = await this.db.upload.findFirst({
+            where: {
+              mime: 'application/pdf',
+              extractedText: { not: null },
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+        }
+        
+        if (!upload) {
+          this.logger.error(`No PDF upload found at all`);
+          
+          // List all uploads for debugging
+          const allUploads = await this.db.upload.findMany({
+            take: 5,
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, projectId: true, userId: true, mime: true, createdAt: true },
+          });
+          this.logger.log(`Recent uploads in DB:`, allUploads);
+          
           return {
             error: 'No PDF upload found',
             message: 'Please upload a PDF file first, then ask me to import the schedule.',
           };
         }
         
-        uploadId = recentUpload.id;
-        this.logger.log(`Using most recent PDF upload: ${uploadId} (created: ${recentUpload.createdAt})`);
+        uploadId = upload.id;
+        this.logger.log(`Found PDF upload: ${uploadId} (created: ${upload.createdAt}, hasText: ${!!upload.extractedText})`);
       } else {
         this.logger.log(`Using provided uploadId: ${uploadId}`);
+        upload = await this.db.upload.findUnique({ where: { id: uploadId } });
       }
 
       this.logger.log(`Calling scheduleService.importScheduleFromPdf with uploadId: ${uploadId}, projectId: ${data.projectId}`);
       
       // Add a small delay to ensure upload is fully processed
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       const preview = await this.scheduleService.importScheduleFromPdf(
         data.projectId,
@@ -705,26 +742,55 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
           forceReimport: true, // Always replace existing schedule when importing from PDF
         });
 
-        // Build a detailed response message
+        // Build a detailed response message with list of created items
         const eventsCount = commitResult.createdEvents?.length || 0;
         const remindersCount = commitResult.createdReminders?.length || 0;
         const skippedCount = (commitResult as any).skippedDuplicates?.length || 0;
         
-        let message = `G'day mate! I've processed your schedule and created:\n`;
-        message += `• ${eventsCount} schedule events\n`;
-        message += `• ${remindersCount} reminders\n`;
+        let message = `G'day mate! I've processed your schedule.\n\n`;
+        message += `📊 **Summary:**\n`;
+        message += `• ${eventsCount} schedule events created\n`;
+        message += `• ${remindersCount} reminders created\n`;
         if (skippedCount > 0) {
           message += `• ${skippedCount} duplicates skipped\n`;
         }
-        message += `\n`;
         
-        if (eventsCount > 0) {
-          message += `Your schedule is now set up! You'll get notifications before each task starts.`;
-        } else if (remindersCount > 0) {
-          message += `Reminders are set! Connect your Google Calendar to sync these as calendar events too.`;
-        } else {
-          message += `No new items created - your schedule may already be up to date.`;
+        // Add detailed list of created reminders (grouped by date)
+        if (commitResult.createdReminders && commitResult.createdReminders.length > 0) {
+          message += `\n📋 **Reminders Created:**\n`;
+          
+          // Group reminders by date
+          const remindersByDate: Record<string, any[]> = {};
+          for (const reminder of commitResult.createdReminders) {
+            const date = new Date(reminder.dueAt).toLocaleDateString('en-US', { 
+              weekday: 'long', 
+              month: 'short', 
+              day: 'numeric' 
+            });
+            if (!remindersByDate[date]) {
+              remindersByDate[date] = [];
+            }
+            remindersByDate[date].push(reminder);
+          }
+          
+          // List reminders by date
+          for (const [date, reminders] of Object.entries(remindersByDate)) {
+            message += `\n**${date}:**\n`;
+            for (const r of reminders.slice(0, 10)) { // Limit to 10 per day to avoid huge messages
+              const time = new Date(r.dueAt).toLocaleTimeString('en-US', { 
+                hour: 'numeric', 
+                minute: '2-digit',
+                hour12: true 
+              });
+              message += `  • ${time} - ${r.title.replace('Reminder: ', '')}\n`;
+            }
+            if (reminders.length > 10) {
+              message += `  ... and ${reminders.length - 10} more\n`;
+            }
+          }
         }
+        
+        message += `\n✅ You'll get notifications before each task starts!`;
 
         return {
           preview,

@@ -517,20 +517,29 @@ async function sendChatMessage() {
   
   // Handle file upload first - upload before adding to chat
   let uploadedFileName = null;
+  let uploadResult = null;
   if (state.uploadedFile) {
     uploadedFileName = state.uploadedFile.name;
-    await uploadFile(projectId);
+    uploadResult = await uploadFile(projectId);
   }
   
   // Build the message to send to AI
   let aiMessage = message;
-  if (uploadedFileName) {
-    // Tell the AI explicitly that a PDF was uploaded and it should process it
-    const uploadContext = `[USER UPLOADED PDF FILE: "${uploadedFileName}" - This PDF has been uploaded to the system. Use the importScheduleFromPdf tool to process it and create reminders/events from the schedule.]`;
+  if (uploadedFileName && uploadResult) {
+    // Tell the AI explicitly that a PDF was uploaded with the upload ID
+    const uploadContext = `[USER UPLOADED PDF FILE: "${uploadedFileName}", uploadId: "${uploadResult.id}", hasExtractedText: ${!!uploadResult.extractedText}. Use the importScheduleFromPdf tool with this uploadId to process it and create reminders/events from the schedule.]`;
     if (message) {
       aiMessage = `${uploadContext}\n\nUser message: ${message}`;
     } else {
       aiMessage = `${uploadContext}\n\nUser message: Please process this uploaded PDF and create reminders for the schedule.`;
+    }
+  } else if (uploadedFileName) {
+    // Upload failed but we still have the filename
+    const uploadContext = `[USER TRIED TO UPLOAD PDF FILE: "${uploadedFileName}" but upload may have failed. Try using importScheduleFromPdf tool to find recent uploads.]`;
+    if (message) {
+      aiMessage = `${uploadContext}\n\nUser message: ${message}`;
+    } else {
+      aiMessage = `${uploadContext}\n\nUser message: Please check for recent PDF uploads and create reminders from the schedule.`;
     }
   }
   
@@ -604,7 +613,7 @@ async function sendChatMessage() {
 }
 
 async function uploadFile(projectId) {
-  if (!state.uploadedFile) return;
+  if (!state.uploadedFile) return null;
   
   const formData = new FormData();
   formData.append('file', state.uploadedFile);
@@ -612,16 +621,24 @@ async function uploadFile(projectId) {
   formData.append('isSchedule', 'true');
   
   try {
-    await api('/uploads', {
+    const result = await api('/uploads', {
       method: 'POST',
       body: formData,
     });
     showToast('File uploaded successfully', 'success');
+    console.log('Upload result:', result);
+    
+    // Store the upload ID for the AI to use
+    state.lastUploadId = result.id;
+    state.lastUploadHasText = !!result.extractedText;
+    
+    clearUploadedFile();
+    return result;
   } catch (error) {
-    showToast('Failed to upload file', 'error');
+    showToast('Failed to upload file: ' + error.message, 'error');
+    clearUploadedFile();
+    return null;
   }
-  
-  clearUploadedFile();
 }
 
 function handleFileSelect(e) {
@@ -1021,14 +1038,39 @@ function formatTime(dateString) {
 function formatMarkdown(text) {
   if (!text) return '';
   
-  // Simple markdown formatting
-  return text
+  // Escape HTML first
+  let html = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  
+  // Format markdown
+  html = html
+    // Bold
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    // Italic
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    // Code
     .replace(/`(.*?)`/g, '<code>$1</code>')
-    .replace(/\n/g, '<br>')
-    .replace(/^- (.*)/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+    // Bullet points (• or -)
+    .replace(/^[•\-]\s+(.*)$/gm, '<li>$1</li>')
+    // Numbered lists
+    .replace(/^\d+\.\s+(.*)$/gm, '<li>$1</li>')
+    // Line breaks
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>');
+  
+  // Wrap consecutive <li> items in <ul>
+  html = html.replace(/(<li>.*?<\/li>)(\s*<br>\s*)?(<li>)/g, '$1$3');
+  html = html.replace(/(<li>.*<\/li>)/gs, '<ul class="chat-list">$1</ul>');
+  
+  // Wrap in paragraph
+  html = `<p>${html}</p>`;
+  
+  // Clean up empty paragraphs
+  html = html.replace(/<p>\s*<\/p>/g, '');
+  
+  return html;
 }
 
 function updateSendButton() {

@@ -20,11 +20,15 @@ export class UploadsService {
   // Dynamic import to avoid serverless issues with pdf-parse
   private async parsePdf(buffer: Buffer): Promise<string> {
     try {
+      this.logger.log(`Attempting to parse PDF, buffer size: ${buffer.length} bytes`);
       const pdfParse = (await import('pdf-parse')).default;
       const pdfData = await pdfParse(buffer);
+      this.logger.log(`PDF parsed successfully, extracted ${pdfData.text.length} characters`);
       return pdfData.text;
     } catch (error) {
-      this.logger.error('PDF parsing failed:', error);
+      this.logger.error('PDF parsing failed:', error.message);
+      this.logger.error('PDF parsing stack:', error.stack);
+      // Return empty string but don't throw - let the upload continue
       return '';
     }
   }
