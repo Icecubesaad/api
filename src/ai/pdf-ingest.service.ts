@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as pdfParse from 'pdf-parse';
+import pdfParse from 'pdf-parse';
 import { DatabaseService } from '../database/database.service';
 import { RagService } from './rag.service';
 import OpenAI from 'openai';
