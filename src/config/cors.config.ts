@@ -62,6 +62,8 @@ export const getCSPDirectives = () => ({
     "'self'",
     "https:",
     "wss:",
+    "http://localhost:3000",
+    "https://web-production-dd79.up.railway.app",
     "https://identitytoolkit.googleapis.com",
     "https://securetoken.googleapis.com",
     "https://www.googleapis.com",
@@ -81,6 +83,7 @@ export const getCSPDirectives = () => ({
     "https://*.web.app",
     "https://*.railway.app",
     "https://*.vercel.app",
+    "https://web-production-dd79.up.railway.app",
   ],
   fontSrc: [
     "'self'",
