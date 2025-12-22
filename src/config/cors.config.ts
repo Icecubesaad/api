@@ -1,33 +1,10 @@
 import { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 
 export const getCorsConfig = (isDevelopment: boolean): CorsOptions => {
-  const developmentOrigins = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-  ];
-
-  const productionOrigins = [
-    'https://jobmate-122bd.firebaseapp.com',
-    'https://jobmate-122bd.web.app',
-    'https://accounts.google.com',
-    'https://identitytoolkit.googleapis.com',
-    'https://securetoken.googleapis.com',
-  ];
-
-  const firebaseOrigins = [
-    'https://accounts.google.com',
-    'https://identitytoolkit.googleapis.com',
-    'https://securetoken.googleapis.com',
-    'https://www.googleapis.com',
-    'https://firebase.googleapis.com',
-  ];
-
+  // Allow all origins in production for flexibility
+  // You can restrict this later once you know all your domains
   return {
-    origin: isDevelopment 
-      ? [...developmentOrigins, ...firebaseOrigins, ...productionOrigins]
-      : [...productionOrigins, ...firebaseOrigins],
+    origin: true, // Allow all origins
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: [
       'Authorization',
@@ -41,7 +18,11 @@ export const getCorsConfig = (isDevelopment: boolean): CorsOptions => {
       'X-Firebase-Client',
       'X-Firebase-Client-Log-Type',
       'X-Goog-Api-Key',
+      'X-Api-Key',
+      'Cache-Control',
+      'Pragma',
     ],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
     credentials: true,
     preflightContinue: false,
     optionsSuccessStatus: 204,
@@ -59,6 +40,9 @@ export const getCSPDirectives = () => ({
     "https://apis.google.com",
     "https://www.googleapis.com",
     "https://securetoken.googleapis.com",
+    "https://*.firebaseapp.com",
+    "https://*.railway.app",
+    "https://*.vercel.app",
   ],
   scriptSrcAttr: ["'unsafe-inline'"],
   styleSrc: [
@@ -76,6 +60,8 @@ export const getCSPDirectives = () => ({
   ],
   connectSrc: [
     "'self'",
+    "https:",
+    "wss:",
     "https://identitytoolkit.googleapis.com",
     "https://securetoken.googleapis.com",
     "https://www.googleapis.com",
@@ -84,18 +70,25 @@ export const getCSPDirectives = () => ({
     "https://firebase.googleapis.com",
     "https://firebaseremoteconfig.googleapis.com",
     "https://content-firebaseappcheck.googleapis.com",
+    "https://*.railway.app",
+    "https://*.vercel.app",
+    "https://*.render.com",
   ],
   frameSrc: [
     "'self'",
     "https://accounts.google.com",
-    "https://jobmate-122bd.firebaseapp.com",
-    "https://jobmate-122bd.web.app",
+    "https://*.firebaseapp.com",
+    "https://*.web.app",
+    "https://*.railway.app",
+    "https://*.vercel.app",
   ],
   fontSrc: [
     "'self'",
     "https://fonts.gstatic.com",
     "https://fonts.googleapis.com",
+    "data:",
   ],
   manifestSrc: ["'self'"],
   mediaSrc: ["'self'", "data:", "blob:"],
+  workerSrc: ["'self'", "blob:"],
 });
