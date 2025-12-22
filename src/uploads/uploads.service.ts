@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from '../database/database.service';
-import * as multer from 'multer';
-import * as pdfParse from 'pdf-parse';
+import pdfParse from 'pdf-parse';
+import 'multer'; // For Express.Multer types
 
 import { PdfIngestService } from '../ai/pdf-ingest.service';
 import { PdfScheduleParseService } from '../schedule/pdf-schedule-parse.service';
