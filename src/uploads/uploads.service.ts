@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from '../database/database.service';
-import pdfParse from 'pdf-parse';
 import 'multer'; // For Express.Multer types
 
 import { PdfIngestService } from '../ai/pdf-ingest.service';
@@ -17,6 +16,18 @@ export class UploadsService {
     private readonly pdfIngestService: PdfIngestService,
     private readonly pdfScheduleParseService: PdfScheduleParseService,
   ) {}
+
+  // Dynamic import to avoid serverless issues with pdf-parse
+  private async parsePdf(buffer: Buffer): Promise<string> {
+    try {
+      const pdfParse = (await import('pdf-parse')).default;
+      const pdfData = await pdfParse(buffer);
+      return pdfData.text;
+    } catch (error) {
+      this.logger.error('PDF parsing failed:', error);
+      return '';
+    }
+  }
 
   async generatePresignedUrl(
     userId: string,
@@ -119,8 +130,7 @@ export class UploadsService {
       let extractedText = '';
       if (file.mimetype === 'application/pdf' && file.buffer) {
         try {
-          const pdfData = await pdfParse(file.buffer);
-          extractedText = pdfData.text;
+          extractedText = await this.parsePdf(file.buffer);
           this.logger.log(`Extracted ${extractedText.length} characters from PDF`);
         } catch (error) {
           this.logger.warn(`Failed to extract text from PDF: ${error.message}`);

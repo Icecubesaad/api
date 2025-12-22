@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import pdfParse from 'pdf-parse';
 import { DatabaseService } from '../database/database.service';
 import { RagService } from './rag.service';
 import OpenAI from 'openai';
@@ -27,6 +26,18 @@ export class PdfIngestService {
     });
   }
 
+  // Dynamic import to avoid serverless issues with pdf-parse
+  private async parsePdf(buffer: Buffer): Promise<string> {
+    try {
+      const pdfParse = (await import('pdf-parse')).default;
+      const pdfData = await pdfParse(buffer);
+      return pdfData.text;
+    } catch (error) {
+      this.logger.error('PDF parsing failed:', error);
+      return '';
+    }
+  }
+
   async processPdf(uploadId: string, fileBuffer: Buffer): Promise<PdfExtractionResult> {
     try {
       // Update status to processing
@@ -36,8 +47,7 @@ export class PdfIngestService {
       });
 
       // Extract text from PDF
-      const pdfData = await pdfParse(fileBuffer);
-      const extractedText = pdfData.text;
+      const extractedText = await this.parsePdf(fileBuffer);
 
       if (!extractedText.trim()) {
         throw new Error('No text content found in PDF');
