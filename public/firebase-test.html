@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JobMate - Firebase Test</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 800px; 
+      margin: 0 auto; 
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 { color: #333; }
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .card h2 { margin-top: 0; color: #444; }
+    button {
+      background: #4285f4;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin: 5px;
+    }
+    button:hover { background: #3367d6; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    button.success { background: #34a853; }
+    button.danger { background: #ea4335; }
+    .status { 
+      padding: 10px; 
+      border-radius: 4px; 
+      margin: 10px 0;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    .status.success { background: #e6f4ea; color: #137333; }
+    .status.error { background: #fce8e6; color: #c5221f; }
+    .status.info { background: #e8f0fe; color: #1967d2; }
+    .status.warning { background: #fef7e0; color: #ea8600; }
+    pre {
+      background: #263238;
+      color: #aed581;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 12px;
+    }
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    .user-info img {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+    }
+    #log {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .log-entry { 
+      padding: 5px 10px; 
+      border-bottom: 1px solid #eee;
+      font-size: 12px;
+    }
+    .log-entry.error { color: #c5221f; }
+    .log-entry.success { color: #137333; }
+  </style>
+</head>
+<body>
+  <h1>🔥 JobMate Firebase Test</h1>
+  
+  <div class="card">
+    <h2>1️⃣ Firebase Status</h2>
+    <div id="firebase-status" class="status info">Initializing Firebase...</div>
+  </div>
+
+  <div class="card">
+    <h2>2️⃣ Google Sign-In</h2>
+    <div id="auth-status" class="status info">Not signed in</div>
+    <div id="user-info" style="display:none;" class="user-info"></div>
+    <br>
+    <button id="signin-btn" onclick="signInWithGoogle()">Sign in with Google (Popup)</button>
+    <button id="signin-redirect-btn" onclick="signInWithRedirect()">Sign in with Google (Redirect)</button>
+    <button id="signout-btn" onclick="signOut()" style="display:none;" class="danger">Sign Out</button>
+  </div>
+
+  <div class="card">
+    <h2>3️⃣ Test Backend Auth</h2>
+    <p>After signing in, test the backend authentication:</p>
+    <button id="test-backend-btn" onclick="testBackendAuth()" disabled>Test /auth/google-signin</button>
+    <div id="backend-status" class="status info">Sign in first to test backend</div>
+    <pre id="backend-response" style="display:none;"></pre>
+  </div>
+
+  <div class="card">
+    <h2>4️⃣ Push Notifications (FCM)</h2>
+    <div id="fcm-status" class="status info">Request permission to enable notifications</div>
+    <button id="fcm-btn" onclick="requestNotificationPermission()">Enable Notifications</button>
+    <button id="register-token-btn" onclick="registerFcmToken()" disabled>Register Token with Backend</button>
+    <pre id="fcm-token" style="display:none;"></pre>
+  </div>
+
+  <div class="card">
+    <h2>📋 Log</h2>
+    <div id="log"></div>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js"></script>
+
+  <script>
+    // Configuration
+    const API_BASE = 'http://localhost:3000';
+    const firebaseConfig = {
+      apiKey: "AIzaSyBcS21HPdSxotT7an5HcOsPs8vKzCFahqI",
+      authDomain: "jobmate-122bd.firebaseapp.com",
+      projectId: "jobmate-122bd",
+      storageBucket: "jobmate-122bd.firebasestorage.app",
+      messagingSenderId: "119527345940",
+      appId: "1:119527345940:web:7d07c3f709bf7e068e7c01",
+      measurementId: "G-GXM6EXQBS7"
+    };
+
+    // State
+    let currentUser = null;
+    let idToken = null;
+    let fcmToken = null;
+    let jwtToken = null;
+
+    // Initialize Firebase
+    try {
+      firebase.initializeApp(firebaseConfig);
+      log('Firebase initialized successfully', 'success');
+      document.getElementById('firebase-status').className = 'status success';
+      document.getElementById('firebase-status').textContent = '✅ Firebase initialized successfully';
+      
+      // Check for redirect result (if coming back from redirect sign-in)
+      firebase.auth().getRedirectResult().then((result) => {
+        if (result.user) {
+          log('Redirect sign-in completed for: ' + result.user.email, 'success');
+        }
+      }).catch((error) => {
+        log('Redirect result error: ' + error.code + ' - ' + error.message, 'error');
+      });
+    } catch (error) {
+      log('Firebase initialization failed: ' + error.message, 'error');
+      document.getElementById('firebase-status').className = 'status error';
+      document.getElementById('firebase-status').textContent = '❌ Firebase initialization failed: ' + error.message;
+    }
+
+    // Auth state listener
+    firebase.auth().onAuthStateChanged(async (user) => {
+      currentUser = user;
+      if (user) {
+        log('User signed in: ' + user.email, 'success');
+        idToken = await user.getIdToken();
+        updateAuthUI(user);
+      } else {
+        log('User signed out');
+        idToken = null;
+        jwtToken = null;
+        updateAuthUI(null);
+      }
+    });
+
+    // Sign in with Google (Popup)
+    async function signInWithGoogle() {
+      try {
+        log('Starting Google Sign-In (Popup)...');
+        const provider = new firebase.auth.GoogleAuthProvider();
+        provider.addScope('email');
+        provider.addScope('profile');
+        provider.setCustomParameters({ prompt: 'select_account' });
+        
+        const result = await firebase.auth().signInWithPopup(provider);
+        log('Google Sign-In successful!', 'success');
+        idToken = await result.user.getIdToken();
+        log('ID Token obtained (first 50 chars): ' + idToken.substring(0, 50) + '...', 'success');
+      } catch (error) {
+        log('Google Sign-In failed: ' + error.code + ' - ' + error.message, 'error');
+        document.getElementById('auth-status').className = 'status error';
+        document.getElementById('auth-status').textContent = '❌ Sign-in failed: ' + error.message;
+        
+        // Show helpful message for common errors
+        if (error.code === 'auth/invalid-continue-uri' || error.code === 'auth/unauthorized-domain') {
+          log('⚠️ Add "localhost" to Firebase Console > Authentication > Settings > Authorized domains', 'error');
+        }
+      }
+    }
+
+    // Sign in with Google (Redirect - no popup)
+    async function signInWithRedirect() {
+      try {
+        log('Starting Google Sign-In (Redirect)...');
+        const provider = new firebase.auth.GoogleAuthProvider();
+        provider.addScope('email');
+        provider.addScope('profile');
+        
+        await firebase.auth().signInWithRedirect(provider);
+        // Page will redirect to Google, then back here
+      } catch (error) {
+        log('Google Sign-In redirect failed: ' + error.code + ' - ' + error.message, 'error');
+        document.getElementById('auth-status').className = 'status error';
+        document.getElementById('auth-status').textContent = '❌ Sign-in failed: ' + error.message;
+        
+        if (error.code === 'auth/invalid-continue-uri' || error.code === 'auth/unauthorized-domain') {
+          log('⚠️ Add "localhost" to Firebase Console > Authentication > Settings > Authorized domains', 'error');
+        }
+      }
+    }
+
+    // Sign out
+    async function signOut() {
+      try {
+        await firebase.auth().signOut();
+        log('Signed out successfully', 'success');
+        jwtToken = null;
+        fcmToken = null;
+        document.getElementById('backend-status').className = 'status info';
+        document.getElementById('backend-status').textContent = 'Sign in first to test backend';
+        document.getElementById('backend-response').style.display = 'none';
+        document.getElementById('fcm-token').style.display = 'none';
+      } catch (error) {
+        log('Sign out failed: ' + error.message, 'error');
+      }
+    }
+
+    // Update Auth UI
+    function updateAuthUI(user) {
+      const authStatus = document.getElementById('auth-status');
+      const userInfo = document.getElementById('user-info');
+      const signinBtn = document.getElementById('signin-btn');
+      const signoutBtn = document.getElementById('signout-btn');
+      const testBackendBtn = document.getElementById('test-backend-btn');
+
+      if (user) {
+        authStatus.className = 'status success';
+        authStatus.textContent = '✅ Signed in as ' + user.email;
+        
+        userInfo.style.display = 'flex';
+        userInfo.innerHTML = `
+          <img src="${user.photoURL || 'https://via.placeholder.com/50'}" alt="Profile">
+          <div>
+            <strong>${user.displayName || 'User'}</strong><br>
+            <small>${user.email}</small><br>
+            <small>UID: ${user.uid}</small>
+          </div>
+        `;
+        
+        signinBtn.style.display = 'none';
+        signoutBtn.style.display = 'inline-block';
+        testBackendBtn.disabled = false;
+      } else {
+        authStatus.className = 'status info';
+        authStatus.textContent = 'Not signed in';
+        userInfo.style.display = 'none';
+        signinBtn.style.display = 'inline-block';
+        signoutBtn.style.display = 'none';
+        testBackendBtn.disabled = true;
+      }
+    }
+
+    // Test Backend Auth
+    async function testBackendAuth() {
+      if (!idToken) {
+        log('No ID token available. Please sign in first.', 'error');
+        return;
+      }
+
+      const backendStatus = document.getElementById('backend-status');
+      const backendResponse = document.getElementById('backend-response');
+      
+      backendStatus.className = 'status info';
+      backendStatus.textContent = '⏳ Testing backend authentication...';
+      
+      try {
+        log('Sending ID token to backend /auth/google-signin...');
+        
+        const response = await fetch(`${API_BASE}/auth/google-signin`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ idToken: idToken }),
+        });
+
+        const data = await response.json();
+        
+        if (response.ok) {
+          jwtToken = data.accessToken;
+          log('Backend auth successful! JWT received.', 'success');
+          backendStatus.className = 'status success';
+          backendStatus.textContent = '✅ Backend authentication successful!';
+          backendResponse.style.display = 'block';
+          backendResponse.textContent = JSON.stringify(data, null, 2);
+          
+          // Enable FCM token registration
+          document.getElementById('register-token-btn').disabled = !fcmToken;
+          
+          // Show alert with token
+          alert('🎉 Backend Auth Success!\n\nJWT Token (first 50 chars):\n' + jwtToken.substring(0, 50) + '...\n\nUser ID: ' + (data.user?.id || 'N/A'));
+        } else {
+          throw new Error(data.message || 'Backend authentication failed');
+        }
+      } catch (error) {
+        log('Backend auth failed: ' + error.message, 'error');
+        backendStatus.className = 'status error';
+        backendStatus.textContent = '❌ Backend auth failed: ' + error.message;
+        backendResponse.style.display = 'block';
+        backendResponse.textContent = error.message;
+      }
+    }
+
+    // Request Notification Permission
+    async function requestNotificationPermission() {
+      const fcmStatus = document.getElementById('fcm-status');
+      const fcmTokenEl = document.getElementById('fcm-token');
+      
+      try {
+        log('Registering service worker...');
+        
+        // First register the service worker
+        const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+        log('Service worker registered', 'success');
+        
+        // Wait for service worker to be ready
+        await navigator.serviceWorker.ready;
+        log('Service worker ready', 'success');
+        
+        log('Requesting notification permission...');
+        const permission = await Notification.requestPermission();
+        
+        if (permission === 'granted') {
+          log('Notification permission granted', 'success');
+          fcmStatus.className = 'status success';
+          fcmStatus.textContent = '✅ Notification permission granted';
+          
+          // Get FCM token
+          try {
+            const messaging = firebase.messaging();
+            
+            // Get token with the registered service worker
+            fcmToken = await messaging.getToken({
+              serviceWorkerRegistration: registration
+            });
+            
+            if (fcmToken) {
+              log('FCM Token obtained!', 'success');
+              fcmTokenEl.style.display = 'block';
+              fcmTokenEl.textContent = 'FCM Token:\n' + fcmToken;
+              document.getElementById('register-token-btn').disabled = !jwtToken;
+              
+              alert('📱 FCM Token obtained!\n\n' + fcmToken.substring(0, 50) + '...');
+            }
+          } catch (fcmError) {
+            log('FCM token error: ' + fcmError.message, 'error');
+            fcmStatus.className = 'status warning';
+            fcmStatus.textContent = '⚠️ Permission granted but FCM token failed: ' + fcmError.message;
+            fcmTokenEl.style.display = 'block';
+            fcmTokenEl.textContent = 'Error: ' + fcmError.message + '\n\nNote: FCM requires a VAPID key from Firebase Console > Project Settings > Cloud Messaging > Web Push certificates';
+          }
+        } else {
+          log('Notification permission denied', 'error');
+          fcmStatus.className = 'status error';
+          fcmStatus.textContent = '❌ Notification permission denied';
+        }
+      } catch (error) {
+        log('Notification error: ' + error.message, 'error');
+        fcmStatus.className = 'status error';
+        fcmStatus.textContent = '❌ Error: ' + error.message;
+      }
+    }
+
+    // Register FCM Token with Backend
+    async function registerFcmToken() {
+      if (!jwtToken) {
+        log('No JWT token. Please authenticate with backend first.', 'error');
+        return;
+      }
+      if (!fcmToken) {
+        log('No FCM token. Please enable notifications first.', 'error');
+        return;
+      }
+
+      try {
+        log('Registering FCM token with backend...');
+        
+        const response = await fetch(`${API_BASE}/webhooks/fcm-token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${jwtToken}`,
+          },
+          body: JSON.stringify({ token: fcmToken }),
+        });
+
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+          log('FCM token registered successfully!', 'success');
+          alert('✅ FCM Token registered with backend!\n\nYou can now receive push notifications.');
+        } else {
+          throw new Error(data.message || 'Failed to register FCM token');
+        }
+      } catch (error) {
+        log('FCM registration failed: ' + error.message, 'error');
+        alert('❌ FCM Registration Failed:\n' + error.message);
+      }
+    }
+
+    // Logging helper
+    function log(message, type = 'info') {
+      const logEl = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' + type;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logEl.insertBefore(entry, logEl.firstChild);
+      console.log(`[${type.toUpperCase()}] ${message}`);
+    }
+  </script>

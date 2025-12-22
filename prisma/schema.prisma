@@ -1,0 +1,284 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  displayName       String?
+  firebaseUid       String   @unique
+  password          String?
+  authProvider      AuthProvider @default(FIREBASE)
+  role              UserRole @default(USER)
+  notifPrefs        Json     @default("{}")
+  stripeCustomerId  String?  @unique
+  tier              SubscriptionTier @default(BASIC)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  projects          Project[]
+  notes             Note[]
+  dailyLogs         DailyLog[]
+  reminders         Reminder[]
+  calendarLinks     CalendarLink[]
+  uploads           Upload[]
+  subscriptions     Subscription[]
+  notifications     Notification[]
+  auditEvents       AuditEvent[]
+
+  @@map("users")
+}
+
+model Project {
+  id          String    @id @default(cuid())
+  ownerId     String
+  name        String
+  description String?
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  owner       User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  notes       Note[]
+  dailyLogs   DailyLog[]
+  reminders   Reminder[]
+  uploads     Upload[]
+
+  @@map("projects")
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  content   String
+  kind      NoteKind @default(TEXT) // Changed from 'type' to 'kind' to match requirements
+  date      DateTime @default(now())
+  tags      String[] @default([])
+  audioPath String?  // For voice notes
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notes")
+}
+
+model DailyLog {
+  id              String   @id @default(cuid())
+  projectId       String
+  userId          String
+  date            DateTime
+  summary         String
+  tasksJson       Json     @default("[]") // Changed from tasks array to JSON
+  sourceRefsJson  Json     @default("{}") // Changed from sourceNoteIds to JSON refs
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("daily_logs")
+}
+
+model Reminder {
+  id             String         @id @default(cuid())
+  projectId      String
+  userId         String
+  title          String
+  dueAt          DateTime
+  recurrenceJson Json?          // Changed from recurrence string to JSON
+  status         ReminderStatus @default(PENDING)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  // Relations
+  project        Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("reminders")
+}
+
+model CalendarLink {
+  id               String           @id @default(cuid())
+  userId           String
+  provider         CalendarProvider
+  refreshTokenEnc  String           // Encrypted refresh token
+  calendarId       String
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  // Relations
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("calendar_links")
+}
+
+model Upload {
+  id            String       @id @default(cuid())
+  projectId     String
+  userId        String
+  storageKey    String
+  mime          String
+  bytes         Int
+  extractedText String?      @db.Text // Store extracted text from PDF
+  parsedAt      DateTime?
+  parseStatus   ParseStatus  @default(PENDING)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  // Relations
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("uploads")
+}
+
+model Embedding {
+  id          String     @id @default(cuid())
+  projectId   String     // Added for filtering
+  sourceType  SourceType // 'note', 'upload', 'log'
+  sourceId    String     // ID of the source (noteId, uploadId, or dailyLogId)
+  vector      Unsupported("vector(1536)") // pgvector
+  chunkText   String
+  chunkIndex  Int
+  date        DateTime?  // Optional date for time-based filtering
+  createdAt   DateTime   @default(now())
+
+  // Relations - removed since we use sourceType/sourceId pattern for polymorphic relations
+  // These would conflict with foreign key constraints, so we handle relations in application code
+
+  @@index([projectId, sourceType, date])
+  @@map("embeddings")
+}
+
+model Subscription {
+  id                String             @id @default(cuid())
+  userId            String             @unique
+  status            SubscriptionStatus
+  tier              SubscriptionTier
+  currentPeriodEnd  DateTime
+  limits            Json               @default("{}")
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  // Relations
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model Notification {
+  id        String            @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  sentAt    DateTime?
+  metaJson  Json              @default("{}")  // Changed from meta to metaJson
+  createdAt DateTime          @default(now())
+
+  // Relations
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model Event {
+  id               String   @id @default(cuid())
+  projectId        String
+  provider         CalendarProvider
+  providerEventId  String
+  title            String
+  startsAt         DateTime
+  endsAt           DateTime
+  metaJson         Json     @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("events")
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String
+  entity    String
+  entityId  String
+  at        DateTime @default(now())
+  metaJson  Json     @default("{}")  // Changed from meta to metaJson
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("audit_events")
+}
+
+// Enums
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum NoteKind {
+  TEXT
+  VOICE
+  AI
+}
+
+enum SourceType {
+  NOTE
+  UPLOAD
+  LOG
+}
+
+enum ReminderStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum CalendarProvider {
+  GOOGLE
+  MICROSOFT
+  LOCAL
+}
+
+enum ParseStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  PAST_DUE
+  UNPAID
+}
+
+enum SubscriptionTier {
+  BASIC
+  PREMIUM
+}
+
+enum AuthProvider {
+  FIREBASE
+  LOCAL
+  GOOGLE
+}
+
+

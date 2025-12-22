@@ -1,0 +1,69 @@
+Weekly Work Schedule
+====================
+
+MONDAY - December 23, 2024
+--------------------------
+09:00 AM - 09:30 AM | Daily Stand-up Meeting
+09:30 AM - 12:00 PM | Feature Development - User Authentication
+12:00 PM - 01:00 PM | Lunch Break
+01:00 PM - 03:00 PM | Code Review Session
+03:00 PM - 03:15 PM | Short Break
+03:15 PM - 05:00 PM | Bug Fixes - Login Issues
+05:00 PM - 05:30 PM | Documentation Update
+
+TUESDAY - December 24, 2024
+---------------------------
+09:00 AM - 09:30 AM | Daily Stand-up Meeting
+09:30 AM - 11:00 AM | Sprint Planning Meeting
+11:00 AM - 12:00 PM | API Integration Work
+12:00 PM - 01:00 PM | Lunch Break
+01:00 PM - 04:00 PM | Database Migration Tasks
+04:00 PM - 05:00 PM | Testing & QA
+05:00 PM - 05:30 PM | Team Sync Call
+
+WEDNESDAY - December 25, 2024
+-----------------------------
+09:00 AM - 09:30 AM | Daily Stand-up Meeting
+09:30 AM - 12:00 PM | Frontend Development - Dashboard
+12:00 PM - 01:00 PM | Lunch Break
+01:00 PM - 02:00 PM | 1:1 with Manager
+02:00 PM - 04:00 PM | Performance Optimization
+04:00 PM - 05:00 PM | Security Audit Review
+05:00 PM - 05:30 PM | End of Day Report
+
+THURSDAY - December 26, 2024
+----------------------------
+09:00 AM - 09:30 AM | Daily Stand-up Meeting
+09:30 AM - 11:00 AM | Client Demo Preparation
+11:00 AM - 12:00 PM | Client Demo Call
+12:00 PM - 01:00 PM | Lunch Break
+01:00 PM - 03:00 PM | Feedback Implementation
+03:00 PM - 03:15 PM | Short Break
+03:15 PM - 05:00 PM | Unit Testing
+05:00 PM - 05:30 PM | Deploy to Staging
+
+FRIDAY - December 27, 2024
+--------------------------
+09:00 AM - 09:30 AM | Daily Stand-up Meeting
+09:30 AM - 11:00 AM | Sprint Retrospective
+11:00 AM - 12:00 PM | Knowledge Sharing Session
+12:00 PM - 01:00 PM | Lunch Break
+01:00 PM - 03:00 PM | Technical Debt Cleanup
+03:00 PM - 04:00 PM | Documentation & Handoff
+04:00 PM - 05:00 PM | Weekly Review & Planning
+05:00 PM - 05:30 PM | Team Social (Optional)
+
+SATURDAY - December 28, 2024
+----------------------------
+OFF - Weekend
+
+SUNDAY - December 29, 2024
+--------------------------
+OFF - Weekend
+
+====================
+Notes:
+- All times are in local timezone
+- Meetings marked with video icon require camera on
+- Breaks are flexible based on workload
+- Contact manager for schedule changes
