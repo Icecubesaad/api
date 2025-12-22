@@ -45,6 +45,8 @@ export class ScheduleService {
   }
 
   async commitSchedule(userIdOrFirebaseUid: string, dto: CommitScheduleDto): Promise<ScheduleImportResult> {
+    this.logger.log(`commitSchedule called with userIdOrFirebaseUid: ${userIdOrFirebaseUid}`);
+    
     // Try to find user by database ID first, then by Firebase UID
     let user = await this.db.user.findUnique({
       where: { id: userIdOrFirebaseUid },
@@ -52,6 +54,7 @@ export class ScheduleService {
     
     if (!user) {
       // Try by Firebase UID
+      this.logger.log(`User not found by ID, trying Firebase UID...`);
       user = await this.db.user.findUnique({
         where: { firebaseUid: userIdOrFirebaseUid },
       });
@@ -63,6 +66,7 @@ export class ScheduleService {
     }
     
     const userId = user.id;
+    this.logger.log(`Found user: ${userId} (firebaseUid: ${user.firebaseUid})`);
     
     // Allow manual schedule creation without upload
     // Only validate upload if uploadId looks like a real CUID
@@ -109,82 +113,98 @@ export class ScheduleService {
     // If forceReimport is true, delete existing events and reminders for this project first
     if (dto.forceReimport) {
       this.logger.log(`Force reimport: clearing existing events and reminders for project ${dto.projectId}`);
-      await this.db.event.deleteMany({ where: { projectId: dto.projectId } });
-      await this.db.reminder.deleteMany({ where: { projectId: dto.projectId, userId } });
+      await Promise.all([
+        this.db.event.deleteMany({ where: { projectId: dto.projectId } }),
+        this.db.reminder.deleteMany({ where: { projectId: dto.projectId, userId } }),
+      ]);
     }
 
     const createdEvents = [];
     const createdReminders = [];
     const skippedDuplicates = [];
 
+    // Prepare batch data for events and reminders
+    const eventDataList = [];
+    const reminderDataList = [];
+
     for (const block of dto.blocks) {
-      try {
-        // Check for duplicates by startsAt + title (skip if forceReimport already cleared)
-        if (!dto.forceReimport) {
-          const duplicateCheck = await this.checkForDuplicate(importHash, block);
-          if (duplicateCheck) {
-            this.logger.log(`Skipping duplicate event: ${block.title} at ${block.startsAt}`);
-            skippedDuplicates.push({ title: block.title, startsAt: block.startsAt });
-            continue;
-          }
+      // Skip duplicates check only if not force reimport
+      if (!dto.forceReimport) {
+        const existing = await this.db.event.findFirst({
+          where: { title: block.title, startsAt: new Date(block.startsAt) },
+        });
+        if (existing) {
+          skippedDuplicates.push({ title: block.title, startsAt: block.startsAt });
+          continue;
         }
-
-        // Try to create calendar event, and ALWAYS create local event record
-        let event = null;
-        let providerEventId: string | undefined;
-        
-        // Try external calendar first (may fail if not connected)
-        try {
-          const calendarEvent = await this.calendarService.createEvent(userId, {
-            summary: block.title,
-            description: block.description,
-            start: { dateTime: block.startsAt },
-            end: { dateTime: block.endsAt },
-          });
-          providerEventId = calendarEvent.id;
-          this.logger.log(`Created Google Calendar event: ${providerEventId}`);
-        } catch (calendarError) {
-          this.logger.warn(`Google Calendar not connected, creating local event only for: ${block.title}`);
-        }
-
-        // ALWAYS create local event record in database
-        try {
-          event = await this.db.event.create({
-            data: {
-              projectId: dto.projectId,
-              provider: providerEventId ? 'GOOGLE' : 'LOCAL' as any,
-              providerEventId: providerEventId || `local-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
-              title: block.title,
-              startsAt: new Date(block.startsAt),
-              endsAt: new Date(block.endsAt),
-              metaJson: {
-                description: block.description,
-                tags: block.tags,
-                importHash,
-                source: 'pdf_schedule_import',
-              },
-            },
-          });
-          createdEvents.push(event);
-          this.logger.log(`Created local event: ${event.id} - ${block.title}`);
-        } catch (eventError) {
-          this.logger.error(`Failed to create local event for ${block.title}:`, eventError);
-        }
-
-        // Always create reminder
-        const reminder = await this.createReminder(userId, dto.projectId, block, event?.id);
-        createdReminders.push(reminder);
-
-        // Send confirmation notification
-        await this.sendEventCreatedNotification(userId, block);
-
-        // Schedule reminder notification
-        await this.scheduleReminderNotification(userId, block, reminder.id);
-
-      } catch (error) {
-        this.logger.error(`Failed to create event for ${block.title}:`, error);
-        // Continue with other blocks
       }
+
+      // Prepare event data
+      eventDataList.push({
+        projectId: dto.projectId,
+        provider: 'LOCAL' as any,
+        providerEventId: `local-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+        title: block.title,
+        startsAt: new Date(block.startsAt),
+        endsAt: new Date(block.endsAt),
+        metaJson: {
+          description: block.description,
+          tags: block.tags,
+          importHash,
+          source: 'pdf_schedule_import',
+        },
+      });
+
+      // Prepare reminder data
+      const dueAt = this.calculateReminderTime(block.startsAt, block.endsAt);
+      reminderDataList.push({
+        title: `Reminder: ${block.title}`,
+        dueAt,
+        projectId: dto.projectId,
+        userId,
+      });
+    }
+
+    // Batch create events using transaction
+    if (eventDataList.length > 0) {
+      this.logger.log(`Batch creating ${eventDataList.length} events...`);
+      
+      // Use createMany for events (faster than individual creates)
+      await this.db.event.createMany({ data: eventDataList });
+      
+      // Fetch created events to return
+      const events = await this.db.event.findMany({
+        where: { 
+          projectId: dto.projectId,
+          metaJson: { path: ['importHash'], equals: importHash },
+        },
+        orderBy: { startsAt: 'asc' },
+      });
+      createdEvents.push(...events);
+    }
+
+    // Batch create reminders
+    if (reminderDataList.length > 0) {
+      this.logger.log(`Batch creating ${reminderDataList.length} reminders...`);
+      
+      await this.db.reminder.createMany({ data: reminderDataList });
+      
+      // Fetch created reminders to return
+      const reminders = await this.db.reminder.findMany({
+        where: { 
+          projectId: dto.projectId,
+          userId,
+          title: { startsWith: 'Reminder: ' },
+        },
+        orderBy: { dueAt: 'asc' },
+        take: reminderDataList.length,
+      });
+      createdReminders.push(...reminders);
+    }
+
+    // Send single summary notification instead of per-event notifications
+    if (createdEvents.length > 0) {
+      await this.sendBatchNotification(userId, createdEvents.length, createdReminders.length);
     }
 
     // Create audit event
@@ -203,6 +223,8 @@ export class ScheduleService {
       },
     });
 
+    this.logger.log(`Batch import complete: ${createdEvents.length} events, ${createdReminders.length} reminders`);
+
     return {
       createdEvents,
       createdReminders,
@@ -212,6 +234,18 @@ export class ScheduleService {
         ? `Created ${createdEvents.length} events and ${createdReminders.length} reminders. Skipped ${skippedDuplicates.length} duplicates.`
         : `Created ${createdEvents.length} events and ${createdReminders.length} reminders.`,
     };
+  }
+
+  private async sendBatchNotification(userId: string, eventsCount: number, remindersCount: number) {
+    try {
+      await this.notificationsService.sendPushNotificationPublic(userId, {
+        title: `G'day Mate! Schedule imported`,
+        body: `Created ${eventsCount} events and ${remindersCount} reminders from your PDF.`,
+        data: { type: 'schedule_import', eventsCount, remindersCount },
+      });
+    } catch (error) {
+      this.logger.warn(`Failed to send batch notification: ${error.message}`);
+    }
   }
 
   private generateImportHash(dto: CommitScheduleDto): string {
@@ -282,11 +316,21 @@ export class ScheduleService {
   private async createReminder(userId: string, projectId: string, block: EditedBlock, eventId?: string) {
     const dueAt = this.calculateReminderTime(block.startsAt, block.endsAt);
     
-    return this.remindersService.create(userId, {
-      title: `Reminder: ${block.title}`,
-      dueAt: dueAt.toISOString(),
-      projectId,
-    });
+    this.logger.log(`Creating reminder for "${block.title}" at ${dueAt.toISOString()}`);
+    
+    try {
+      const reminder = await this.remindersService.create(userId, {
+        title: `Reminder: ${block.title}`,
+        dueAt: dueAt.toISOString(),
+        projectId,
+      });
+      
+      this.logger.log(`Created reminder: ${reminder.id} for "${block.title}"`);
+      return reminder;
+    } catch (error) {
+      this.logger.error(`Failed to create reminder for "${block.title}":`, error.message);
+      throw error;
+    }
   }
 
   private calculateReminderTime(startsAt: string, endsAt: string): Date {

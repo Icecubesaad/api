@@ -29,7 +29,9 @@ export class PdfIngestService {
   // Dynamic import to avoid serverless issues with pdf-parse
   private async parsePdf(buffer: Buffer): Promise<string> {
     try {
-      const pdfParse = (await import('pdf-parse')).default;
+      const pdfParseModule = await import('pdf-parse');
+      const pdfParse = (pdfParseModule.default || pdfParseModule) as (buffer: Buffer) => Promise<{ text: string }>;
+      
       const pdfData = await pdfParse(buffer);
       return pdfData.text;
     } catch (error) {

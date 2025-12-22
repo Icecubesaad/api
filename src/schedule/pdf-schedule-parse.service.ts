@@ -69,63 +69,48 @@ export class PdfScheduleParseService {
 
   private async gptParsePdf(text: string, scheduleDate: string, tz: string): Promise<ParseResult> {
     const today = new Date();
-    const systemPrompt = `You are a schedule parser. Extract schedule items from text and return JSON.
+    const currentYear = today.getFullYear();
+    const systemPrompt = `You are a schedule parser. Extract schedule items from text and return COMPACT JSON.
 
-RULES:
-1. Extract ALL tasks from ALL days (Mon-Fri)
-2. Skip days marked "OFF" or weekends
-3. Use EXACT titles from schedule
-4. Parse dates correctly (e.g., "MONDAY - December 23, 2024" = 2024-12-23)
-5. Default year: ${today.getFullYear()}
+CRITICAL RULES:
+1. Extract ALL tasks from ALL days (Mon-Sun)
+2. Skip days marked "OFF", "Day Off", "REST", or similar
+3. Use EXACT titles from schedule (keep them SHORT)
+4. Parse dates correctly - if no year specified, use ${currentYear}
+5. IMPORTANT: Default year is ${currentYear}, NOT 2024
+6. KEEP RESPONSE UNDER 2000 CHARACTERS - abbreviate titles if needed
+7. NO descriptions field - only title, startsAt, endsAt, tags
 
-Return ONLY valid JSON:
-{"confidence":0.95,"blocks":[{"title":"Task","startsAt":"2024-12-23T09:00:00.000Z","endsAt":"2024-12-23T09:30:00.000Z","tags":["Monday"]}]}
-
-Keep response SHORT. No descriptions needed. Just title, startsAt, endsAt, tags.`;
+Return ONLY valid JSON (no markdown, no explanation):
+{"confidence":0.9,"blocks":[{"title":"Task Name","startsAt":"${currentYear}-12-23T09:00:00.000Z","endsAt":"${currentYear}-12-23T09:30:00.000Z","tags":["Mon"]}]}`;
 
     try {
+      this.logger.log(`Sending ${text.length} chars to GPT for parsing...`);
+      
+      // Limit input text to prevent huge responses
+      const truncatedText = text.substring(0, 4000);
+      
       const response = await this.aiService.generateCompletion([
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Parse this schedule:\n\n${text.substring(0, 3000)}` }, // Limit input to prevent huge responses
+        { role: 'user', content: `Parse this schedule (extract all tasks with times):\n\n${truncatedText}` },
       ]);
 
+      this.logger.log(`GPT response length: ${response.length} chars`);
+      
       // Clean the response - remove markdown code blocks if present
-      let cleanResponse = response.trim();
-      if (cleanResponse.startsWith('```json')) {
-        cleanResponse = cleanResponse.slice(7);
-      }
-      if (cleanResponse.startsWith('```')) {
-        cleanResponse = cleanResponse.slice(3);
-      }
-      if (cleanResponse.endsWith('```')) {
-        cleanResponse = cleanResponse.slice(0, -3);
-      }
-      cleanResponse = cleanResponse.trim();
+      let cleanResponse = this.cleanJsonResponse(response);
+      
+      // Try to repair truncated or malformed JSON
+      cleanResponse = this.repairJson(cleanResponse);
 
-      // Try to fix truncated JSON by finding the last complete block
-      if (!cleanResponse.endsWith('}')) {
-        this.logger.warn('GPT response appears truncated, attempting to fix...');
-        // Find the last complete block
-        const lastCompleteBlock = cleanResponse.lastIndexOf('}]');
-        if (lastCompleteBlock > 0) {
-          cleanResponse = cleanResponse.substring(0, lastCompleteBlock + 2) + '}';
-        } else {
-          // Try to close the JSON properly
-          const lastBrace = cleanResponse.lastIndexOf('}');
-          if (lastBrace > 0) {
-            cleanResponse = cleanResponse.substring(0, lastBrace + 1);
-            if (!cleanResponse.includes('"blocks"')) {
-              throw new Error('Truncated response without blocks');
-            }
-            // Ensure proper closing
-            if (!cleanResponse.endsWith(']}')) {
-              cleanResponse += ']}';
-            }
-          }
-        }
+      let result: ParseResult;
+      try {
+        result = JSON.parse(cleanResponse) as ParseResult;
+      } catch (parseError) {
+        this.logger.error(`JSON parse error: ${parseError.message}`);
+        this.logger.error(`Attempted to parse: ${cleanResponse.substring(0, 500)}...`);
+        throw parseError;
       }
-
-      const result = JSON.parse(cleanResponse) as ParseResult;
       
       // Validate the result
       if (!result.blocks || !Array.isArray(result.blocks)) {
@@ -133,20 +118,92 @@ Keep response SHORT. No descriptions needed. Just title, startsAt, endsAt, tags.
       }
 
       // Filter out any blocks with invalid dates
-      result.blocks = result.blocks.filter(block => {
+      const validBlocks = result.blocks.filter(block => {
+        if (!block.startsAt || !block.endsAt || !block.title) {
+          this.logger.warn(`Skipping invalid block: ${JSON.stringify(block)}`);
+          return false;
+        }
         const start = new Date(block.startsAt);
         const end = new Date(block.endsAt);
-        return !isNaN(start.getTime()) && !isNaN(end.getTime());
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+          this.logger.warn(`Skipping block with invalid dates: ${block.title}`);
+          return false;
+        }
+        return true;
       });
 
+      result.blocks = validBlocks;
       this.logger.log(`GPT parsed ${result.blocks.length} valid blocks`);
       return result;
     } catch (error) {
-      this.logger.error('GPT parsing failed:', error);
+      this.logger.error('GPT parsing failed:', error.message);
       // Fall back to deterministic parsing
       this.logger.log('Falling back to deterministic parsing...');
       return this.deterministicParse(text, scheduleDate, tz);
     }
+  }
+
+  private cleanJsonResponse(response: string): string {
+    let clean = response.trim();
+    
+    // Remove markdown code blocks
+    if (clean.startsWith('```json')) {
+      clean = clean.slice(7);
+    } else if (clean.startsWith('```')) {
+      clean = clean.slice(3);
+    }
+    if (clean.endsWith('```')) {
+      clean = clean.slice(0, -3);
+    }
+    
+    // Remove any leading/trailing whitespace or newlines
+    clean = clean.trim();
+    
+    // Remove any text before the first {
+    const firstBrace = clean.indexOf('{');
+    if (firstBrace > 0) {
+      clean = clean.substring(firstBrace);
+    }
+    
+    return clean;
+  }
+
+  private repairJson(json: string): string {
+    let repaired = json;
+    
+    // If it doesn't end with }, try to fix it
+    if (!repaired.endsWith('}')) {
+      this.logger.warn('JSON appears truncated, attempting repair...');
+      
+      // Find the last complete object in the blocks array
+      const lastCompleteBlock = repaired.lastIndexOf('}]');
+      if (lastCompleteBlock > 0) {
+        repaired = repaired.substring(0, lastCompleteBlock + 2) + '}';
+        this.logger.log('Repaired by closing at last complete block');
+      } else {
+        // Try to find last complete block object
+        const lastBlockEnd = repaired.lastIndexOf('}');
+        if (lastBlockEnd > 0) {
+          // Check if we're inside the blocks array
+          const blocksStart = repaired.indexOf('"blocks"');
+          if (blocksStart > 0 && lastBlockEnd > blocksStart) {
+            repaired = repaired.substring(0, lastBlockEnd + 1) + ']}';
+            this.logger.log('Repaired by closing blocks array and root object');
+          }
+        }
+      }
+    }
+    
+    // Fix common JSON issues
+    // Remove trailing commas before ] or }
+    repaired = repaired.replace(/,\s*]/g, ']');
+    repaired = repaired.replace(/,\s*}/g, '}');
+    
+    // Fix unescaped quotes in strings (common GPT issue)
+    // This is tricky - only do basic fixes
+    repaired = repaired.replace(/:\s*"([^"]*)"([^,}\]]*)"([^"]*)",/g, ': "$1\'$2\'$3",');
+    
+    return repaired;
   }
 
   private async extractTextFromUpload(upload: any): Promise<string> {
@@ -167,7 +224,8 @@ Keep response SHORT. No descriptions needed. Just title, startsAt, endsAt, tags.
       try {
         const fs = await import('fs/promises');
         const path = await import('path');
-        const pdfParse = await import('pdf-parse').then(m => m.default);
+        const pdfParseModule = await import('pdf-parse');
+        const pdfParse = (pdfParseModule.default || pdfParseModule) as (buffer: Buffer) => Promise<{ text: string }>;
         
         const filePath = path.join(process.cwd(), 'uploads', upload.path);
         this.logger.log(`Attempting to read PDF from: ${filePath}`);
@@ -188,7 +246,8 @@ Keep response SHORT. No descriptions needed. Just title, startsAt, endsAt, tags.
         this.logger.log(`Attempting to fetch PDF from S3: ${upload.url}`);
         const response = await fetch(upload.url);
         const arrayBuffer = await response.arrayBuffer();
-        const pdfParse = await import('pdf-parse').then(m => m.default);
+        const pdfParseModule = await import('pdf-parse');
+        const pdfParse = (pdfParseModule.default || pdfParseModule) as (buffer: Buffer) => Promise<{ text: string }>;
         const pdfData = await pdfParse(Buffer.from(arrayBuffer));
         
         this.logger.log(`Extracted ${pdfData.text.length} characters from S3 PDF`);
@@ -237,18 +296,29 @@ Keep response SHORT. No descriptions needed. Just title, startsAt, endsAt, tags.
     let confidence = 0;
     const warnings: string[] = [];
 
-    // Regex patterns for time ranges
-    const time12hPattern = /(?<start>\b\d{1,2}:\d{2}\s?(?:AM|PM))\s*[-–—|]\s*(?<end>\d{1,2}:\d{2}\s?(?:AM|PM))/i;
-    const time24hPattern = /(?<start>\b\d{1,2}:\d{2})\s*[-–—|]\s*(?<end>\d{1,2}:\d{2})/;
-    const sectionHeaderPattern = /^(⏰\s*)?(Morning|Midday|Afternoon|End of Day)\b/i;
+    // Regex patterns for time ranges - support multiple formats
+    const time12hPattern = /(?<start>\b\d{1,2}:\d{2}\s?(?:AM|PM|am|pm))\s*[-–—|to]\s*(?<end>\d{1,2}:\d{2}\s?(?:AM|PM|am|pm))/i;
+    const time24hPattern = /(?<start>\b\d{1,2}:\d{2})\s*[-–—|to]\s*(?<end>\d{1,2}:\d{2})/;
+    // Also match times with title on same line: "9:00 AM - 10:00 AM | Task Name" or "9:00 AM - 10:00 AM Task Name"
+    const timeWithTitlePattern = /(\d{1,2}:\d{2}\s?(?:AM|PM|am|pm)?)\s*[-–—|to]\s*(\d{1,2}:\d{2}\s?(?:AM|PM|am|pm)?)\s*[|:]?\s*(.+)/i;
     
-    // Pattern for day headers like "MONDAY - December 23, 2024" or "Monday, December 23"
-    const dayHeaderPattern = /^(MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY)\s*[-–—,]\s*(\w+\s+\d{1,2},?\s*\d{4}|\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})/i;
-    // Alternative pattern: "December 23, 2024" or "23/12/2024"
-    const datePattern = /(\w+\s+\d{1,2},?\s*\d{4}|\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})/;
+    const sectionHeaderPattern = /^(⏰\s*)?(Morning|Midday|Afternoon|Evening|End of Day|Night)\b/i;
+    
+    // Pattern for day headers like "MONDAY - December 23, 2024" or "Monday, December 23" or just "MONDAY"
+    const dayHeaderPattern = /^(MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY)\s*[-–—,:]?\s*(.*)/i;
+    // Pattern for "OFF" days
+    const offDayPattern = /\b(OFF|Day Off|REST|HOLIDAY|VACATION|NO WORK)\b/i;
+
+    this.logger.log(`Deterministic parsing ${lines.length} lines...`);
 
     for (const line of lines) {
       if (!line.trim()) continue;
+      
+      // Skip OFF days
+      if (offDayPattern.test(line)) {
+        this.logger.log(`Skipping OFF day: ${line}`);
+        continue;
+      }
 
       // Check for day headers (multi-day schedule)
       const dayMatch = line.match(dayHeaderPattern);
@@ -257,6 +327,12 @@ Keep response SHORT. No descriptions needed. Just title, startsAt, endsAt, tags.
         if (currentBlock) {
           this.finalizeBlock(currentBlock, blocks, currentDate, tz, currentSection, warnings);
           currentBlock = null;
+        }
+        
+        // Check if this day is marked as OFF
+        if (offDayPattern.test(dayMatch[2])) {
+          this.logger.log(`Skipping OFF day from header: ${line}`);
+          continue;
         }
         
         // Parse the date from the header
@@ -281,7 +357,44 @@ Keep response SHORT. No descriptions needed. Just title, startsAt, endsAt, tags.
         continue;
       }
 
-      // Check for time ranges (support | as separator too)
+      // Try to match time with title on same line first
+      const timeWithTitle = line.match(timeWithTitlePattern);
+      if (timeWithTitle) {
+        // Finalize previous block
+        if (currentBlock) {
+          this.finalizeBlock(currentBlock, blocks, currentDate, tz, currentSection, warnings);
+        }
+
+        const startStr = timeWithTitle[1];
+        const endStr = timeWithTitle[2];
+        const title = timeWithTitle[3].trim();
+
+        // Start new block with title
+        currentBlock = {
+          startsAt: '',
+          endsAt: '',
+          title: title,
+          description: '',
+          tags: currentSection ? [currentSection] : [],
+        };
+
+        // Parse times
+        try {
+          const { startsAt, endsAt } = this.parseTimeRange(startStr, endStr, currentDate, tz);
+          currentBlock.startsAt = startsAt;
+          currentBlock.endsAt = endsAt;
+          
+          // Immediately finalize since we have the title
+          this.finalizeBlock(currentBlock, blocks, currentDate, tz, currentSection, warnings);
+          currentBlock = null;
+        } catch (error) {
+          warnings.push(`Invalid time range: ${line}`);
+          currentBlock = null;
+        }
+        continue;
+      }
+
+      // Check for time ranges without title
       const timeMatch = line.match(time12hPattern) || line.match(time24hPattern);
       
       if (timeMatch) {
@@ -290,15 +403,11 @@ Keep response SHORT. No descriptions needed. Just title, startsAt, endsAt, tags.
           this.finalizeBlock(currentBlock, blocks, currentDate, tz, currentSection, warnings);
         }
 
-        // Extract title from the same line if present (after the time range)
-        const titleMatch = line.match(/(?:\d{1,2}:\d{2}\s?(?:AM|PM)?)\s*[-–—|]\s*(?:\d{1,2}:\d{2}\s?(?:AM|PM)?)\s*[|]?\s*(.+)/i);
-        const inlineTitle = titleMatch ? titleMatch[1].trim() : '';
-
         // Start new block
         currentBlock = {
           startsAt: '',
           endsAt: '',
-          title: inlineTitle,
+          title: '',
           description: '',
           tags: currentSection ? [currentSection] : [],
         };
@@ -341,6 +450,9 @@ Keep response SHORT. No descriptions needed. Just title, startsAt, endsAt, tags.
     if (blocks.length >= 5) confidence += 0.3;
 
     this.logger.log(`Deterministic parse found ${blocks.length} blocks with confidence ${confidence}`);
+    if (warnings.length > 0) {
+      this.logger.warn(`Parse warnings: ${warnings.join(', ')}`);
+    }
 
     return {
       confidence,

@@ -486,13 +486,13 @@ function addChatMessage(content, role = 'user') {
   state.chatMessages.push({ role, content });
 }
 
-function addLoadingMessage() {
+function addLoadingMessage(customMessage) {
   const messageDiv = document.createElement('div');
   messageDiv.className = 'message assistant';
   messageDiv.id = 'loading-message';
   messageDiv.innerHTML = `
     <div class="message-content">
-      <div class="loading"></div> Thinking...
+      <div class="loading"></div> ${customMessage || 'Thinking...'}
     </div>
   `;
   elements.chatMessages.appendChild(messageDiv);
@@ -518,9 +518,22 @@ async function sendChatMessage() {
   // Handle file upload first - upload before adding to chat
   let uploadedFileName = null;
   let uploadResult = null;
+  const hasPdfUpload = state.uploadedFile && state.uploadedFile.type === 'application/pdf';
+  
   if (state.uploadedFile) {
     uploadedFileName = state.uploadedFile.name;
+    
+    // Show uploading message for PDF
+    if (hasPdfUpload) {
+      addLoadingMessage('📤 Uploading PDF...');
+    }
+    
     uploadResult = await uploadFile(projectId);
+    
+    // Update loading message after upload
+    if (hasPdfUpload) {
+      removeLoadingMessage();
+    }
   }
   
   // Build the message to send to AI
@@ -557,7 +570,13 @@ async function sendChatMessage() {
   
   elements.chatInput.value = '';
   elements.sendBtn.disabled = true;
-  addLoadingMessage();
+  
+  // Show appropriate loading message
+  if (hasPdfUpload) {
+    addLoadingMessage('📊 Analyzing PDF and creating schedule...');
+  } else {
+    addLoadingMessage();
+  }
   
   try {
     const response = await api('/ai/chat', {
@@ -582,7 +601,14 @@ async function sendChatMessage() {
       for (const result of response.toolResults) {
         console.log('Tool result:', result.tool, result.result);
         
-        if (result.tool === 'createReminder') {
+        if (result.tool === 'generateNote') {
+          if (result.result?.noteId) {
+            showToast('Note created!', 'success');
+            await loadNotes();
+          } else {
+            showToast('Failed to create note', 'error');
+          }
+        } else if (result.tool === 'createReminder') {
           if (result.result?.reminderId) {
             showToast('Reminder created!', 'success');
           } else {
@@ -962,6 +988,25 @@ async function loadSchedule() {
       const reminderDate = new Date(r.dueAt).toISOString().split('T')[0];
       return reminderDate === date;
     });
+    
+    if (reminders.length === 0 && state.reminders.length > 0) {
+      // No reminders for selected date, but there are reminders - show helpful message
+      const nextReminder = state.reminders[0]; // Already sorted by dueAt
+      const nextDate = new Date(nextReminder.dueAt).toISOString().split('T')[0];
+      
+      elements.scheduleTimeline.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon">📅</div>
+          <div class="empty-state-title">No events on ${date}</div>
+          <p>You have ${state.reminders.length} reminders scheduled.</p>
+          <p>Next reminder: ${new Date(nextReminder.dueAt).toLocaleDateString()}</p>
+          <button class="btn btn-secondary" onclick="document.getElementById('schedule-date').value='${nextDate}'; loadSchedule();">
+            Jump to ${nextDate}
+          </button>
+        </div>
+      `;
+      return;
+    }
     
     renderSchedule(reminders.map(r => ({
       title: r.title,

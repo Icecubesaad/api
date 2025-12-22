@@ -47,11 +47,17 @@ CRITICAL TOOL USAGE RULES:
 5. If a message contains "[USER UPLOADED PDF FILE:" - you MUST call importScheduleFromPdf, no exceptions.
 
 Available tools:
-- generateNote: Create a note from content
+- generateNote: Create a note from content - USE IMMEDIATELY when user asks to create/save a note
 - createReminder: Create a reminder for the user - USE IMMEDIATELY when user asks
 - createCalendarEvent: Add an event to the user's calendar - USE IMMEDIATELY when user asks
 - summarizeNotes: Generate a summary from user's notes
 - importScheduleFromPdf: Import schedule from uploaded PDF and create calendar events and reminders - USE IMMEDIATELY when PDF is uploaded
+
+NOTE CREATION (CRITICAL):
+- When user says "create a note", "save a note", "add a note" - IMMEDIATELY call generateNote
+- Extract the title, content, and tags from the user's message
+- Example: "Create a note titled Meeting Notes with content: discussed project timeline, tags: work, meeting"
+  → Call generateNote with title="Meeting Notes", content="discussed project timeline", tags=["work", "meeting"]
 
 PDF UPLOAD HANDLING (CRITICAL - MUST FOLLOW):
 - When you see "[USER UPLOADED PDF FILE:" in ANY message, you MUST call importScheduleFromPdf immediately
@@ -129,6 +135,7 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
       const response = completion.choices[0];
       let toolResults = [];
       let createdEntities: any = {};
+      let confirmationMessage = '';
 
       if (response.message.tool_calls) {
         const results = await this.executeToolCalls(
@@ -138,10 +145,16 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
         );
         toolResults = results.toolResults;
         createdEntities = results.createdEntities;
+        
+        // Generate confirmation message based on tool results
+        confirmationMessage = this.generateConfirmationMessage(toolResults, createdEntities);
       }
 
+      // Use GPT's message if available, otherwise use our confirmation message
+      const finalMessage = response.message.content || confirmationMessage;
+
       return {
-        message: response.message.content || '',
+        message: finalMessage,
         toolResults,
         createdEntities,
         usage: {
@@ -154,6 +167,58 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
       this.logger.error('Error in AI chat:', error);
       throw new Error('Failed to process chat request');
     }
+  }
+
+  private generateConfirmationMessage(toolResults: any[], createdEntities: any): string {
+    const messages: string[] = [];
+    const greetings = ["Hey mate!", "G'day!", "No worries!", "Too easy!"];
+    const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+
+    for (const result of toolResults) {
+      switch (result.tool) {
+        case 'generateNote':
+          if (result.result?.noteId) {
+            const tags = result.result.tags?.length > 0 ? ` with tags: ${result.result.tags.join(', ')}` : '';
+            const title = result.result.title ? `"${result.result.title}"` : 'your note';
+            messages.push(`${greeting} I've created ${title}${tags} for you. 📝`);
+          }
+          break;
+          
+        case 'createReminder':
+          if (result.result?.reminderId) {
+            const title = result.result.title || 'your reminder';
+            const dueAt = result.result.dueAt ? new Date(result.result.dueAt).toLocaleString() : '';
+            messages.push(`${greeting} I've set a reminder "${title}"${dueAt ? ` for ${dueAt}` : ''}. ⏰`);
+          }
+          break;
+          
+        case 'createCalendarEvent':
+          if (result.result?.eventId) {
+            const title = result.result.summary || result.result.title || 'your event';
+            messages.push(`${greeting} I've added "${title}" to your calendar. 📅`);
+          }
+          break;
+          
+        case 'importScheduleFromPdf':
+          // This already has its own message in the result
+          if (result.result?.message) {
+            return result.result.message;
+          }
+          if (result.result?.summary) {
+            const { eventsCreated, remindersCreated } = result.result.summary;
+            messages.push(`${greeting} I've imported your schedule - created ${eventsCreated} events and ${remindersCreated} reminders! 📋`);
+          }
+          break;
+          
+        case 'summarizeNotes':
+          if (result.result?.summary) {
+            messages.push(`${greeting} Here's your summary:\n\n${result.result.summary}`);
+          }
+          break;
+      }
+    }
+
+    return messages.length > 0 ? messages.join('\n\n') : '';
   }
 
   private getAvailableTools(allowedTools?: string[]) {
@@ -371,16 +436,24 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
     // Get or create a default project if none provided
     const projectId = data.projectId || await this.getOrCreateDefaultProject(data.userId);
     
+    // Combine title and content if title is provided
+    let fullContent = data.content;
+    if (data.title) {
+      fullContent = `# ${data.title}\n\n${data.content}`;
+    }
+    
     const note = await this.db.note.create({
       data: {
         projectId: projectId,
         userId: data.userId,
-        content: data.content,
+        content: fullContent,
         kind: 'AI',
         date: data.date ? new Date(data.date) : new Date(),
         tags: data.tags || [],
       },
     });
+
+    this.logger.log(`Created note: ${note.id} with tags: ${note.tags.join(', ')}`);
 
     // Ingest into RAG system
     await this.ragService.ingestNote(
@@ -390,7 +463,7 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
       note.date,
     );
 
-    return { noteId: note.id };
+    return { noteId: note.id, title: data.title, tags: note.tags };
   }
 
   private async createReminder(data: any) {
@@ -818,9 +891,26 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
       }
     } catch (error) {
       this.logger.error('Failed to import schedule from PDF:', error);
+      this.logger.error('Error details:', error.message, error.stack);
+      
+      // Provide more specific error messages based on the error type
+      let userMessage = 'Unable to extract schedule from the uploaded PDF.';
+      let debugInfo = error.message;
+      
+      if (error.message?.includes('Upload not found')) {
+        userMessage = 'Could not find the uploaded PDF. Please try uploading the file again.';
+      } else if (error.message?.includes('extract text')) {
+        userMessage = 'Could not read text from the PDF. Make sure the PDF contains selectable text (not scanned images).';
+      } else if (error.message?.includes('JSON') || error.message?.includes('parse')) {
+        userMessage = 'Had trouble understanding the schedule format. Try a PDF with clear time blocks like "9:00 AM - 10:00 AM Task Name".';
+      } else if (error.message?.includes('User not found')) {
+        userMessage = 'Session error. Please refresh the page and try again.';
+      }
+      
       return {
-        error: 'Failed to parse schedule from PDF. Please ensure the PDF contains a clear schedule with time ranges.',
-        message: 'Unable to extract schedule from the uploaded PDF. Try uploading a PDF with clear time blocks like "9:00 AM - 10:00 AM Task Name".',
+        error: debugInfo,
+        message: `G'day mate, ${userMessage}`,
+        hint: 'Tip: Make sure your PDF has clear time ranges (e.g., "9:00 AM - 10:00 AM") followed by task names.',
       };
     }
   }

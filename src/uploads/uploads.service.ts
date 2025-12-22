@@ -21,7 +21,11 @@ export class UploadsService {
   private async parsePdf(buffer: Buffer): Promise<string> {
     try {
       this.logger.log(`Attempting to parse PDF, buffer size: ${buffer.length} bytes`);
-      const pdfParse = (await import('pdf-parse')).default;
+      
+      // pdf-parse has a weird export structure - try multiple ways
+      const pdfParseModule = await import('pdf-parse');
+      const pdfParse = (pdfParseModule.default || pdfParseModule) as (buffer: Buffer) => Promise<{ text: string }>;
+      
       const pdfData = await pdfParse(buffer);
       this.logger.log(`PDF parsed successfully, extracted ${pdfData.text.length} characters`);
       return pdfData.text;
@@ -149,38 +153,18 @@ export class UploadsService {
           storageKey: `${userId}/${projectId}/${Date.now()}-${file.originalname}`,
           mime: file.mimetype,
           bytes: file.size,
-          parseStatus: 'PENDING',
+          parseStatus: extractedText ? 'COMPLETED' : 'PENDING',
           extractedText: extractedText || null, // Store extracted text
         },
       });
 
-      // If it's a PDF with extracted text, process it
-      if (file.mimetype === 'application/pdf' && extractedText) {
-        try {
-          const defaultScheduleDate = scheduleDate || new Date().toISOString().split('T')[0];
-          const defaultTz = tz || 'UTC';
-          
-          // Parse as schedule
-          await this.pdfScheduleParseService.parseScheduleFromUpload(
-            upload.id,
-            projectId,
-            defaultScheduleDate,
-            defaultTz
-          );
-          this.logger.log(`PDF parsed as schedule for upload ${upload.id}`);
-        } catch (error) {
-          this.logger.error(`Failed to process PDF ${upload.id}:`, error);
-          await this.db.upload.update({
-            where: { id: upload.id },
-            data: { parseStatus: 'FAILED' },
-          });
-        }
-      }
+      // Don't parse schedule here - let the AI chat handle it to avoid double parsing
+      // The AI will call importScheduleFromPdf which will parse and create reminders
 
       return {
         ...upload,
         message: file.mimetype === 'application/pdf' 
-          ? 'PDF uploaded successfully and queued for processing'
+          ? 'PDF uploaded successfully - ask me to import the schedule!'
           : 'File uploaded successfully',
         prompt: prompt || null,
       };
