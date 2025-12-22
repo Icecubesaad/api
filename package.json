@@ -6,7 +6,7 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "build": "node --max-old-space-size=1536 node_modules/.bin/nest build",
+    "build": "npx prisma generate && npx @nestjs/cli build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:migrate:prod": "npx prisma migrate deploy && node dist/main",

@@ -1,25 +1,16 @@
 {
   "version": 2,
+  "buildCommand": "npm install && npx prisma generate && npx @nestjs/cli build",
   "builds": [
     {
       "src": "dist/src/main.js",
       "use": "@vercel/node"
-    },
-    {
-      "src": "public/**",
-      "use": "@vercel/static"
     }
   ],
   "routes": [
     {
-      "src": "/(.*)\\.(html|css|js|ico|png|jpg|svg)",
-      "dest": "/public/$1.$2"
-    },
-    {
       "src": "/(.*)",
       "dest": "/dist/src/main.js"
     }
-  ],
-  "buildCommand": "npm install && npx prisma generate && npx @nestjs/cli build",
-  "outputDirectory": "."
+  ]
 }
