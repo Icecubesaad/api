@@ -146,8 +146,8 @@ export class NotificationsService {
   }
 
   private enforceAustralianGreeting(title: string): string {
-    // Allow titles starting with "Hey mate!" or "G'day Mate," (space after is optional)
-    const greetingPattern = /^(Hey mate!|G'day Mate,)\s?/i;
+    // Allow titles starting with "Hey mate!" or "G'day Mate" followed by punctuation
+    const greetingPattern = /^(Hey mate!|G'day Mate[,!]?)\s?/i;
     
     // Check if title already starts with the required greeting pattern
     if (greetingPattern.test(title)) {
@@ -161,7 +161,7 @@ export class NotificationsService {
 
   // Validate greeting prefix - used for testing
   static validateGreetingPrefix(title: string): boolean {
-    const greetingPattern = /^(Hey mate!|G'day Mate,)\s?/i;
+    const greetingPattern = /^(Hey mate!|G'day Mate[,!]?)\s?/i;
     return greetingPattern.test(title);
   }
 
