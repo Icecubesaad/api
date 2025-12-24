@@ -260,20 +260,31 @@ async function requestNotificationPermission() {
       
       // Handle foreground messages - show in chat when check-in notification arrives
       messaging.onMessage((payload) => {
-        console.log('FCM message received:', payload);
+        console.log('🔔 FCM message received in foreground:', payload);
         
         const { data, notification } = payload;
         
-        // Show browser notification
+        // Show browser notification (even in foreground for visibility)
         if (notification) {
-          new Notification(notification.title, {
-            body: notification.body,
-            icon: '/favicon.ico',
-          });
+          try {
+            new Notification(notification.title, {
+              body: notification.body,
+              icon: '/favicon.ico',
+            });
+          } catch (e) {
+            console.log('Could not show notification:', e);
+          }
         }
         
-        // If it's a check-in notification, add it to chat
-        if (data?.action === 'checkin' || data?.type === 'reminder_checkin') {
+        // If it's a reminder/check-in notification, add it to chat
+        const isCheckin = data?.action === 'checkin' || 
+                          data?.type === 'reminder_checkin' || 
+                          data?.type === 'reminder_due' ||
+                          data?.reminderId;
+        
+        console.log('🔔 Is check-in notification:', isCheckin, 'data:', data);
+        
+        if (isCheckin) {
           handleCheckinNotification(data, notification);
         }
       });
@@ -285,6 +296,8 @@ async function requestNotificationPermission() {
 
 // Handle check-in notifications - add GPT message to chat
 function handleCheckinNotification(data, notification) {
+  console.log('📋 handleCheckinNotification called:', { data, notification });
+  
   // Switch to chat view
   switchView('chat');
   
