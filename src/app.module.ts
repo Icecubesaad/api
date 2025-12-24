@@ -33,6 +33,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { RemindersModule } from './reminders/reminders.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { ScheduleModule } from './schedule/schedule.module';
+import { CheckinModule } from './checkin/checkin.module';
 
 @Module({
   imports: [
@@ -40,7 +41,7 @@ import { ScheduleModule } from './schedule/schedule.module';
     ServeStaticModule.forRoot({
       rootPath: join(process.cwd(), 'public'),
       serveRoot: '/',
-      exclude: ['/api*', '/auth*', '/projects*', '/notes*', '/reminders*', '/ai*', '/calendar*', '/billing*', '/profile*', '/notifications*', '/tasks*', '/webhooks*', '/uploads*', '/schedule*', '/health*'],
+      exclude: ['/api*', '/auth*', '/projects*', '/notes*', '/reminders*', '/ai*', '/calendar*', '/billing*', '/profile*', '/notifications*', '/tasks*', '/webhooks*', '/uploads*', '/schedule*', '/health*', '/checkin*'],
     }),
 
     // Configuration
@@ -124,6 +125,7 @@ import { ScheduleModule } from './schedule/schedule.module';
     RemindersModule,
     UploadsModule,
     ScheduleModule,
+    CheckinModule,
   ],
   providers: [
     DatabaseService,

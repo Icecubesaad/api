@@ -89,6 +89,37 @@ export const templates = {
     title: "G'day Mate! Goal smashed",
     body: `You've achieved your goal: "${vars.goalTitle}"! Time to celebrate - you've earned it!`,
   }),
+
+  // Daily Check-in Templates
+  dailyCheckinMorning: (vars?: { userName?: string }) => ({
+    title: "G'day Mate! How's your day going?",
+    body: `${vars?.userName ? `${vars.userName}, j` : 'J'}ust checking in to see how you're tracking. Any updates to log or tasks to tackle?`,
+  }),
+
+  dailyCheckinAgenda: (vars?: { userName?: string }) => ({
+    title: "Hey mate! Time for your daily check-in",
+    body: "What's on the agenda today? I'm here to help you stay organized!",
+  }),
+
+  dailyCheckinMotivation: (vars?: { userName?: string }) => ({
+    title: "G'day Mate, ready to smash it today?",
+    body: "Let me know what you're working on and I'll help keep you on track.",
+  }),
+
+  dailyCheckinQuick: (vars?: { userName?: string }) => ({
+    title: "Hey mate! Quick check-in time",
+    body: "How's everything going? Need help with any reminders or notes?",
+  }),
+
+  dailyCheckinOrganize: (vars?: { userName?: string }) => ({
+    title: "G'day Mate! Let's get organized",
+    body: "What's the plan for today? I can help you set up reminders and track your progress.",
+  }),
+
+  checkinResponseReceived: (vars?: any) => ({
+    title: "Hey mate! Got your update",
+    body: "I've logged your check-in. Anything else you need help with today?",
+  }),
 };
 
 export function assertHasGreetingPrefix(text: string): boolean {

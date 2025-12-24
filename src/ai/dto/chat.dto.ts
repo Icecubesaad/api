@@ -72,6 +72,14 @@ export class ChatRequestDto {
   projectId?: string;
 
   @ApiPropertyOptional({ 
+    description: 'User timezone (IANA format) - defaults to Australia/Sydney if not provided', 
+    example: 'Australia/Sydney' 
+  })
+  @IsOptional()
+  @IsString()
+  timezone?: string;
+
+  @ApiPropertyOptional({ 
     description: 'Context (leave empty for simple chat)', 
     type: ChatContext 
   })

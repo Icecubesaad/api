@@ -30,7 +30,19 @@ export class AiService {
   }
 
   private getSystemPrompt(): string {
+    const today = new Date();
+    const currentDate = today.toISOString().split('T')[0];
+    const currentYear = today.getFullYear();
+    const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const currentTimeUTC = today.toISOString();
+    const currentHour = today.getUTCHours();
+    
     return `You are JobMate, a friendly and helpful daily assistant. You help users track their work, create notes, generate daily logs, schedule tasks, and manage their projects.
+
+CURRENT DATE/TIME CONTEXT (CRITICAL - USE THESE VALUES):
+- Today's date: ${currentDate}
+- Current year: ${currentYear}
+- Tomorrow: ${tomorrow}
 
 Your personality:
 - Be kind, casual, and concise
@@ -38,6 +50,20 @@ Your personality:
 - Be encouraging and supportive
 - Focus on productivity and organization
 - Keep it industry-agnostic - never assume specific domains like construction
+
+CRITICAL DATE/TIME HANDLING RULES:
+- ALWAYS use ${currentYear} as the default year for any date
+- NEVER use 2022, 2023, or 2024 - the current year is ${currentYear}
+- When user says "tomorrow", use ${tomorrow}
+- Format all dates as ISO 8601: YYYY-MM-DDTHH:mm:ss.sssZ
+
+TIMEZONE HANDLING (VERY IMPORTANT):
+- ALWAYS assume the user is in Australia/Sydney timezone unless they specify otherwise
+- When user says "10:50 PM today", they mean 10:50 PM in THEIR local time (Australia/Sydney)
+- DO NOT convert to UTC - just use the time they specify with today's date
+- Example: "10:50 PM today" on ${currentDate} = "${currentDate}T22:50:00" (NO Z suffix!)
+- The backend will handle timezone conversion
+- When displaying times back to user, show the time they requested (not UTC)
 
 CRITICAL TOOL USAGE RULES:
 1. When user asks to create a reminder, schedule, or event - IMMEDIATELY call the appropriate tool. DO NOT ask for confirmation first.
@@ -51,7 +77,13 @@ Available tools:
 - createReminder: Create a reminder for the user - USE IMMEDIATELY when user asks
 - createCalendarEvent: Add an event to the user's calendar - USE IMMEDIATELY when user asks
 - summarizeNotes: Generate a summary from user's notes
+- listReminders: Get all reminders from the database - USE THIS when user asks to see/list/show reminders. NEVER make up reminder data!
 - importScheduleFromPdf: Import schedule from uploaded PDF and create calendar events and reminders - USE IMMEDIATELY when PDF is uploaded
+
+LISTING REMINDERS (CRITICAL - NEVER HALLUCINATE):
+- When user asks "show my reminders", "list reminders", "what reminders do I have" - ALWAYS call listReminders tool
+- NEVER make up or invent reminder data - only show what the tool returns
+- If the tool returns 0 reminders, tell the user they have no reminders
 
 NOTE CREATION (CRITICAL):
 - When user says "create a note", "save a note", "add a note" - IMMEDIATELY call generateNote
@@ -70,6 +102,7 @@ REMINDER CREATION (CRITICAL):
 - When user says "remind me to X at Y time" - IMMEDIATELY call createReminder
 - When user says "set a reminder for X" - IMMEDIATELY call createReminder
 - Parse the date/time from user's message and create the reminder right away
+- ALWAYS use the current year from CURRENT DATE CONTEXT above - NEVER use 2022, 2023, or 2024
 - Focus on REMINDERS since calendar may not be connected
 
 IMPORTANT: When sending ANY notification, ALWAYS start with "Hey mate!" or "G'day Mate,"
@@ -77,10 +110,52 @@ IMPORTANT: When sending ANY notification, ALWAYS start with "Hey mate!" or "G'da
 Be helpful, efficient, and action-oriented. Execute tools immediately without asking for confirmation.`;
   }
 
+  private getSystemPromptWithTimezone(timezone: string): string {
+    // ALWAYS default to Australia/Sydney, NEVER use UTC
+    const userTz = timezone || 'Australia/Sydney';
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    
+    // Get current time in user's timezone
+    const userLocalTime = today.toLocaleString('en-AU', { 
+      timeZone: userTz,
+      weekday: 'short',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+    const userLocalDate = today.toLocaleDateString('en-CA', { timeZone: userTz }); // YYYY-MM-DD format
+    
+    // Calculate tomorrow in user's timezone
+    const tomorrowDate = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+    const tomorrowLocal = tomorrowDate.toLocaleDateString('en-CA', { timeZone: userTz });
+
+    return this.getSystemPrompt()
+      .replace(/Today's date: [^\n]+/, `Today's date: ${userLocalDate}`)
+      .replace(/Tomorrow: [^\n]+/, `Tomorrow: ${tomorrowLocal}`)
+      .replace(/TIMEZONE HANDLING \(VERY IMPORTANT\):[\s\S]*?When displaying times back to user, show the time they requested \(not UTC\)/, 
+        `TIMEZONE HANDLING (CRITICAL - USER'S LOCAL TIME IS KING):
+- User's timezone: ${userTz}
+- User's current local time: ${userLocalTime}
+- Today's date in user's timezone: ${userLocalDate}
+
+CRITICAL FOR REMINDERS - USE USER'S LOCAL TIME:
+- When user says "10:50 PM today", use dueAt="${userLocalDate}T22:50:00" (NO Z suffix!)
+- The dueAt format is: YYYY-MM-DDTHH:mm:ss (user's local time, NO timezone suffix)
+- NEVER add "Z" at the end - that would wrongly interpret it as UTC
+- NEVER convert to UTC - the backend handles timezone conversion
+- Example: "10:50 PM" = "T22:50:00", "9:30 AM" = "T09:30:00"
+
+When confirming to user, show the EXACT time they requested in their local timezone (e.g., "10:50 PM" not some UTC-converted time)`);
+  }
+
   async chat(chatRequest: ChatRequestDto, userId: string): Promise<ChatResponseDto> {
     try {
       // Debug: Log the conversation messages
-      this.logger.log(`Chat request from user ${userId} with ${chatRequest.messages.length} messages`);
+      this.logger.log(`Chat request from user ${userId} with ${chatRequest.messages.length} messages, timezone: ${chatRequest.timezone}`);
       chatRequest.messages.forEach((msg, index) => {
         this.logger.log(`Message ${index}: ${msg.role} - ${msg.content.substring(0, 100)}...`);
       });
@@ -108,7 +183,9 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
         }
       }
 
-      const systemPrompt = this.getSystemPrompt();
+      const systemPrompt = chatRequest.timezone 
+        ? this.getSystemPromptWithTimezone(chatRequest.timezone)
+        : this.getSystemPrompt();
       const contextualSystemPrompt = ragContext 
         ? `${systemPrompt}\n\n${ragContext}`
         : systemPrompt;
@@ -142,6 +219,7 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
           response.message.tool_calls,
           userId,
           chatRequest.projectId,
+          chatRequest.timezone,
         );
         toolResults = results.toolResults;
         createdEntities = results.createdEntities;
@@ -187,8 +265,20 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
         case 'createReminder':
           if (result.result?.reminderId) {
             const title = result.result.title || 'your reminder';
-            const dueAt = result.result.dueAt ? new Date(result.result.dueAt).toLocaleString() : '';
-            messages.push(`${greeting} I've set a reminder "${title}"${dueAt ? ` for ${dueAt}` : ''}. ⏰`);
+            // Show time in a user-friendly format (the time they requested)
+            const dueDate = result.result.dueAt ? new Date(result.result.dueAt) : null;
+            let timeStr = '';
+            if (dueDate) {
+              timeStr = dueDate.toLocaleString('en-AU', {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true,
+              });
+            }
+            messages.push(`${greeting} I've set a reminder "${title}"${timeStr ? ` for ${timeStr}` : ''}. ⏰`);
           }
           break;
           
@@ -213,6 +303,22 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
         case 'summarizeNotes':
           if (result.result?.summary) {
             messages.push(`${greeting} Here's your summary:\n\n${result.result.summary}`);
+          }
+          break;
+
+        case 'listReminders':
+          if (result.result) {
+            const { count, reminders } = result.result;
+            if (count === 0) {
+              messages.push(`${greeting} You don't have any reminders yet. Would you like me to create one?`);
+            } else {
+              let reminderList = `${greeting} Here are your ${count} reminder${count > 1 ? 's' : ''}:\n\n`;
+              for (const r of reminders) {
+                const statusIcon = r.status === 'COMPLETED' ? '✅' : r.status === 'CANCELLED' ? '❌' : '⏰';
+                reminderList += `${statusIcon} "${r.title}" - ${r.dueAtFormatted} (${r.status})\n`;
+              }
+              messages.push(reminderList);
+            }
           }
           break;
       }
@@ -245,13 +351,13 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
         type: 'function' as const,
         function: {
           name: 'createReminder',
-          description: 'Create a reminder for the user',
+          description: 'Create a reminder for the user. IMPORTANT: When user specifies a time like "11:08 PM", use their LOCAL time directly. For example, if user says "11:08 PM today" on 2025-12-24, use dueAt="2025-12-24T23:08:00" (no Z suffix, treat as local time).',
           parameters: {
             type: 'object',
             properties: {
               projectId: { type: 'string', description: 'Project ID this reminder belongs to (optional - will use default project if not provided)' },
               title: { type: 'string', description: 'Reminder title' },
-              dueAt: { type: 'string', description: 'Due date/time in ISO format' },
+              dueAt: { type: 'string', description: 'Due date/time. Use format YYYY-MM-DDTHH:mm:ss WITHOUT the Z suffix. This represents the time in the user\'s local timezone.' },
               recurrence: { type: 'string', description: 'Recurrence pattern: daily, weekly, monthly' },
             },
             required: ['title', 'dueAt'],
@@ -330,13 +436,28 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
           },
         },
       },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'listReminders',
+          description: 'Get all reminders for the user from the database. ALWAYS use this tool when user asks to see, list, or show their reminders. Never make up reminder data.',
+          parameters: {
+            type: 'object',
+            properties: {
+              projectId: { type: 'string', description: 'Filter by project ID (optional)' },
+              status: { type: 'string', description: 'Filter by status: PENDING, COMPLETED, CANCELLED (optional)' },
+            },
+            required: [],
+          },
+        },
+      },
     ];
 
     if (!allowedTools) return allTools;
     return allTools.filter(tool => allowedTools.includes(tool.function.name));
   }
 
-  private async executeToolCalls(toolCalls: any[], userId: string, projectId?: string) {
+  private async executeToolCalls(toolCalls: any[], userId: string, projectId?: string, timezone?: string) {
     const toolResults = [];
     const createdEntities: any = {};
 
@@ -361,6 +482,7 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
               ...parsedArgs,
               userId,
               projectId: projectId || parsedArgs.projectId,
+              timezone: timezone,
             });
             toolResults.push({ tool: name, result: reminder });
             createdEntities.reminder = reminder;
@@ -420,6 +542,14 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
             createdEntities.schedulePreview = scheduleImport;
             break;
 
+          case 'listReminders':
+            const reminders = await this.listReminders({
+              ...parsedArgs,
+              userId,
+            });
+            toolResults.push({ tool: name, result: reminders });
+            break;
+
           default:
             toolResults.push({ tool: name, result: 'Tool not implemented' });
         }
@@ -470,15 +600,99 @@ Be helpful, efficient, and action-oriented. Execute tools immediately without as
     // Get or create a default project if none provided
     const projectId = data.projectId || await this.getOrCreateDefaultProject(data.userId);
     
+    // Parse the dueAt date - ALWAYS use user's timezone, never default to UTC
+    const dueAtStr = data.dueAt;
+    const userTimezone = data.timezone || 'Australia/Sydney'; // Default to Australia if not provided
+    
+    let dueAtDate: Date;
+    
+    // Check if the date string already has timezone info (Z or +/- offset)
+    const hasTimezoneInfo = dueAtStr.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(dueAtStr);
+    
+    if (hasTimezoneInfo) {
+      // Date already has timezone info, parse directly
+      dueAtDate = new Date(dueAtStr);
+      this.logger.log(`Reminder has timezone info: ${dueAtStr} -> ${dueAtDate.toISOString()}`);
+    } else {
+      // Date is in local time format (e.g., "2025-12-24T23:08:00")
+      // Interpret it as the user's timezone and convert to UTC for storage
+      const match = dueAtStr.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):?(\d{2})?/);
+      
+      if (match) {
+        const [, year, month, day, hour, minute, second = '00'] = match;
+        
+        // Create a formatter to get the timezone offset for the user's timezone
+        const options: Intl.DateTimeFormatOptions = {
+          timeZone: userTimezone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        };
+        
+        // Get the offset for the user's timezone
+        // We need to find what UTC time corresponds to the user's local time
+        const targetLocalTime = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+        
+        // Binary search approach: find the UTC time that displays as the target local time
+        // Start with a rough estimate
+        let utcGuess = new Date(`${targetLocalTime}Z`);
+        
+        // Get what this UTC time looks like in the user's timezone
+        const formatter = new Intl.DateTimeFormat('en-CA', {
+          timeZone: userTimezone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        });
+        
+        // Format and parse to get the offset
+        const parts = formatter.formatToParts(utcGuess);
+        const formatted = {
+          year: parts.find(p => p.type === 'year')?.value,
+          month: parts.find(p => p.type === 'month')?.value,
+          day: parts.find(p => p.type === 'day')?.value,
+          hour: parts.find(p => p.type === 'hour')?.value,
+          minute: parts.find(p => p.type === 'minute')?.value,
+          second: parts.find(p => p.type === 'second')?.value,
+        };
+        
+        const localTimeFromUtc = `${formatted.year}-${formatted.month}-${formatted.day}T${formatted.hour}:${formatted.minute}:${formatted.second}`;
+        
+        // Calculate the difference
+        const targetMs = new Date(`${targetLocalTime}Z`).getTime();
+        const actualLocalMs = new Date(`${localTimeFromUtc}Z`).getTime();
+        const offsetMs = targetMs - actualLocalMs;
+        
+        // Adjust the UTC time by the offset
+        dueAtDate = new Date(utcGuess.getTime() + offsetMs);
+        
+        this.logger.log(`Reminder timezone conversion: input=${dueAtStr}, timezone=${userTimezone}, UTC=${dueAtDate.toISOString()}`);
+      } else {
+        // Fallback: just parse as-is
+        dueAtDate = new Date(dueAtStr);
+        this.logger.warn(`Could not parse reminder date format: ${dueAtStr}, using as-is`);
+      }
+    }
+    
     const reminder = await this.db.reminder.create({
       data: {
         title: data.title,
-        dueAt: new Date(data.dueAt),
+        dueAt: dueAtDate,
         recurrenceJson: data.recurrence ? { pattern: data.recurrence } : null,
         projectId: projectId,
         userId: data.userId,
       },
     });
+
+    this.logger.log(`Created reminder: "${data.title}" due at ${dueAtDate.toISOString()} (user timezone: ${userTimezone})`);
 
     return { reminderId: reminder.id, ...reminder };
   }
@@ -925,6 +1139,51 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
     });
 
     return completion.choices[0].message.content || '';
+  }
+
+  private async listReminders(data: { userId: string; projectId?: string; status?: string }) {
+    const whereClause: any = { userId: data.userId };
+    
+    if (data.projectId) {
+      whereClause.projectId = data.projectId;
+    }
+    
+    if (data.status) {
+      whereClause.status = data.status;
+    }
+
+    const reminders = await this.db.reminder.findMany({
+      where: whereClause,
+      orderBy: { dueAt: 'asc' },
+      include: {
+        project: {
+          select: { name: true },
+        },
+      },
+    });
+
+    // Format reminders for display
+    const formattedReminders = reminders.map(r => ({
+      id: r.id,
+      title: r.title,
+      dueAt: r.dueAt.toISOString(),
+      dueAtFormatted: r.dueAt.toLocaleString('en-AU', {
+        weekday: 'short',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      }),
+      status: r.status,
+      projectName: r.project?.name || 'No project',
+    }));
+
+    return {
+      count: reminders.length,
+      reminders: formattedReminders,
+    };
   }
 }
 

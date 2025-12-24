@@ -1,6 +1,7 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { AiService } from '../ai/ai.service';
+import { S3Service } from '../uploads/s3.service';
 import { ParseResult, ParsedBlock, ParsePreview } from './dto/schedule.dto';
 import * as crypto from 'crypto';
 
@@ -12,6 +13,7 @@ export class PdfScheduleParseService {
     private readonly db: DatabaseService,
     @Inject(forwardRef(() => AiService))
     private readonly aiService: AiService,
+    private readonly s3Service: S3Service,
   ) {}
 
   async parseScheduleFromUpload(
@@ -240,20 +242,38 @@ Return ONLY valid JSON (no markdown, no explanation):
       }
     }
 
-    // Try to read from S3 URL if available
+    // Try to read from S3 using storageKey
+    if (upload.storageKey && this.s3Service.isEnabled()) {
+      try {
+        this.logger.log(`Attempting to fetch PDF from S3 with key: ${upload.storageKey}`);
+        const buffer = await this.s3Service.getFile(upload.storageKey);
+        if (buffer) {
+          const pdfParseModule = await import('pdf-parse');
+          const pdfParse = (pdfParseModule.default || pdfParseModule) as (buffer: Buffer) => Promise<{ text: string }>;
+          const pdfData = await pdfParse(buffer);
+          
+          this.logger.log(`Extracted ${pdfData.text.length} characters from S3 PDF`);
+          return pdfData.text;
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to read PDF from S3: ${error.message}`);
+      }
+    }
+
+    // Fallback: Try to read from S3 URL directly if available
     if (upload.url && upload.url.includes('s3')) {
       try {
-        this.logger.log(`Attempting to fetch PDF from S3: ${upload.url}`);
+        this.logger.log(`Attempting to fetch PDF from S3 URL: ${upload.url}`);
         const response = await fetch(upload.url);
         const arrayBuffer = await response.arrayBuffer();
         const pdfParseModule = await import('pdf-parse');
         const pdfParse = (pdfParseModule.default || pdfParseModule) as (buffer: Buffer) => Promise<{ text: string }>;
         const pdfData = await pdfParse(Buffer.from(arrayBuffer));
         
-        this.logger.log(`Extracted ${pdfData.text.length} characters from S3 PDF`);
+        this.logger.log(`Extracted ${pdfData.text.length} characters from S3 URL`);
         return pdfData.text;
       } catch (error) {
-        this.logger.warn(`Failed to read PDF from S3: ${error.message}`);
+        this.logger.warn(`Failed to read PDF from S3 URL: ${error.message}`);
       }
     }
 
@@ -261,7 +281,7 @@ Return ONLY valid JSON (no markdown, no explanation):
     this.logger.error('Could not extract text from upload - no valid source found');
     this.logger.log('Upload details:', { 
       id: upload.id, 
-      path: upload.path, 
+      storageKey: upload.storageKey,
       url: upload.url,
       hasExtractedText: !!upload.extractedText,
       hasFileContent: !!upload.fileContent 

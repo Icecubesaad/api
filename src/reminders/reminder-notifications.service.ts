@@ -1,16 +1,24 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ConfigService } from '@nestjs/config';
+import OpenAI from 'openai';
 
 @Injectable()
 export class ReminderNotificationsService {
   private readonly logger = new Logger(ReminderNotificationsService.name);
+  private openai: OpenAI;
 
   constructor(
     private readonly db: DatabaseService,
     private readonly notificationsService: NotificationsService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.openai = new OpenAI({
+      apiKey: this.configService.get<string>('ai.openaiApiKey'),
+    });
+  }
 
   // Check for due reminders every minute
   @Cron(CronExpression.EVERY_MINUTE)
@@ -54,33 +62,93 @@ export class ReminderNotificationsService {
     }
   }
 
-  private async sendReminderNotification(reminder: any) {
+  // Generate a GPT check-in message for the task
+  private async generateCheckinMessage(taskTitle: string, projectName?: string): Promise<{ title: string; body: string }> {
     try {
-      const dueTime = reminder.dueAt.toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
+      const prompt = `You are JobMate, a friendly Australian assistant. Generate a short, casual check-in notification for a task that's now due.
+
+Task: "${taskTitle}"
+${projectName ? `Project: "${projectName}"` : ''}
+
+Rules:
+- Start with "Hey mate!" or "G'day Mate,"
+- Keep it under 100 characters for the title
+- Ask about progress or readiness in a friendly way
+- Use Australian slang occasionally
+- Be encouraging, not pushy
+- The body should be a short follow-up question about the task
+
+Return JSON format:
+{"title": "...", "body": "..."}`;
+
+      const completion = await this.openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.8,
+        max_tokens: 150,
       });
 
-      // Determine if this is a long or short event based on title
-      const isLongEvent = reminder.title.includes('Work on') || 
-                         reminder.title.includes('coding') || 
-                         reminder.title.includes('development');
+      const content = completion.choices[0].message.content || '';
       
-      const greeting = isLongEvent ? "G'day Mate," : "Hey mate!";
+      // Try to parse JSON response
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          title: parsed.title || this.getDefaultTitle(taskTitle),
+          body: parsed.body || this.getDefaultBody(taskTitle),
+        };
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to generate GPT check-in message: ${error.message}`);
+    }
+
+    // Fallback to default messages
+    return {
+      title: this.getDefaultTitle(taskTitle),
+      body: this.getDefaultBody(taskTitle),
+    };
+  }
+
+  private getDefaultTitle(taskTitle: string): string {
+    const greetings = [
+      `Hey mate! Time for "${taskTitle}"`,
+      `G'day Mate, "${taskTitle}" is due now`,
+      `Hey mate! Ready to tackle "${taskTitle}"?`,
+      `G'day! "${taskTitle}" — time to roll`,
+    ];
+    return greetings[Math.floor(Math.random() * greetings.length)];
+  }
+
+  private getDefaultBody(taskTitle: string): string {
+    const bodies = [
+      "How's it going? Need any help getting started?",
+      "Ready to smash this one out?",
+      "Let me know how you go with this!",
+      "Tap to check in on your progress.",
+      "You've got this, mate!",
+    ];
+    return bodies[Math.floor(Math.random() * bodies.length)];
+  }
+
+  private async sendReminderNotification(reminder: any) {
+    try {
       const eventTitle = reminder.title.replace('Reminder: ', '');
-      
-      const title = `${greeting} "${eventTitle}" starts at ${dueTime} — time to roll.`;
+      const projectName = reminder.project?.name;
+
+      // Generate GPT check-in message
+      const { title, body } = await this.generateCheckinMessage(eventTitle, projectName);
       
       await this.notificationsService.sendNotification(reminder.userId, 'PUSH', {
         title,
-        body: 'Your scheduled event is starting soon',
+        body,
         data: {
-          type: 'reminder_due',
+          type: 'reminder_checkin',
           reminderId: reminder.id,
           eventTitle,
           dueAt: reminder.dueAt.toISOString(),
           projectId: reminder.projectId,
+          action: 'checkin', // Frontend can use this to open check-in dialog
         },
       });
 
@@ -89,10 +157,10 @@ export class ReminderNotificationsService {
         data: {
           userId: reminder.userId,
           title,
-          body: 'Your scheduled event is starting soon',
+          body,
           sentAt: new Date(),
           metaJson: {
-            type: 'reminder_due',
+            type: 'reminder_checkin',
             reminderId: reminder.id,
             eventTitle,
             dueAt: reminder.dueAt.toISOString(),
@@ -100,7 +168,7 @@ export class ReminderNotificationsService {
         },
       });
 
-      this.logger.log(`Sent reminder notification for: ${reminder.title} to user ${reminder.userId}`);
+      this.logger.log(`Sent check-in notification for: ${reminder.title} to user ${reminder.userId}`);
     } catch (error) {
       this.logger.error(`Failed to send reminder notification for ${reminder.id}:`, error);
     }

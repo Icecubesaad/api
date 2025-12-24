@@ -132,6 +132,7 @@ model Upload {
   projectId     String
   userId        String
   storageKey    String
+  url           String?      // S3 URL for the file
   mime          String
   bytes         Int
   extractedText String?      @db.Text // Store extracted text from PDF

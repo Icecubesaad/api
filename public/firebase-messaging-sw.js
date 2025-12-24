@@ -23,8 +23,53 @@ messaging.onBackgroundMessage((payload) => {
     body: payload.notification?.body || 'You have a new notification',
     icon: '/favicon.ico',
     badge: '/favicon.ico',
-    data: payload.data
+    tag: payload.data?.reminderId || 'jobmate-notification',
+    data: payload.data,
+    actions: [
+      { action: 'checkin', title: '✅ Check In' },
+      { action: 'dismiss', title: '❌ Dismiss' }
+    ]
   };
 
   self.registration.showNotification(notificationTitle, notificationOptions);
+});
+
+// Handle notification click
+self.addEventListener('notificationclick', (event) => {
+  console.log('[firebase-messaging-sw.js] Notification clicked:', event);
+  
+  event.notification.close();
+  
+  const data = event.notification.data || {};
+  const action = event.action;
+  
+  // Build URL with check-in data
+  let url = '/';
+  if (data.action === 'checkin' || data.type === 'reminder_checkin') {
+    url = `/?checkin=true&reminderId=${data.reminderId || ''}&eventTitle=${encodeURIComponent(data.eventTitle || '')}&projectId=${data.projectId || ''}`;
+  }
+  
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // If app is already open, focus it and send message
+      for (const client of clientList) {
+        if (client.url.includes(self.location.origin) && 'focus' in client) {
+          client.focus();
+          client.postMessage({
+            type: 'CHECKIN_NOTIFICATION',
+            data: data,
+            notification: {
+              title: event.notification.title,
+              body: event.notification.body,
+            }
+          });
+          return;
+        }
+      }
+      // Otherwise open new window
+      if (clients.openWindow) {
+        return clients.openWindow(url);
+      }
+    })
+  );
 });

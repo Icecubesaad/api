@@ -1,20 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from '../database/database.service';
 import 'multer'; // For Express.Multer types
 
 import { PdfIngestService } from '../ai/pdf-ingest.service';
 import { PdfScheduleParseService } from '../schedule/pdf-schedule-parse.service';
+import { S3Service } from './s3.service';
 
 @Injectable()
 export class UploadsService {
   private readonly logger = new Logger(UploadsService.name);
 
   constructor(
-    private readonly config: ConfigService,
     private readonly db: DatabaseService,
     private readonly pdfIngestService: PdfIngestService,
     private readonly pdfScheduleParseService: PdfScheduleParseService,
+    private readonly s3Service: S3Service,
   ) {}
 
   // Dynamic import to avoid serverless issues with pdf-parse
@@ -119,9 +119,9 @@ export class UploadsService {
     userId: string,
     projectId: string,
     prompt?: string,
-    isSchedule?: boolean,
-    scheduleDate?: string,
-    tz?: string,
+    _isSchedule?: boolean,
+    _scheduleDate?: string,
+    _tz?: string,
   ) {
     try {
       if (!file) {
@@ -145,12 +145,26 @@ export class UploadsService {
         }
       }
 
-      // Create upload record with extracted text
+      // Generate storage key
+      const storageKey = `${userId}/${projectId}/${Date.now()}-${file.originalname}`;
+      
+      // Upload to S3 if configured
+      let s3Url: string | null = null;
+      if (this.s3Service.isEnabled() && file.buffer) {
+        const s3Result = await this.s3Service.uploadFile(storageKey, file.buffer, file.mimetype);
+        if (s3Result) {
+          s3Url = s3Result.url;
+          this.logger.log(`File uploaded to S3: ${s3Url}`);
+        }
+      }
+
+      // Create upload record with extracted text and S3 URL
       const upload = await this.db.upload.create({
         data: {
           projectId,
           userId,
-          storageKey: `${userId}/${projectId}/${Date.now()}-${file.originalname}`,
+          storageKey,
+          url: s3Url, // Store S3 URL if available
           mime: file.mimetype,
           bytes: file.size,
           parseStatus: extractedText ? 'COMPLETED' : 'PENDING',

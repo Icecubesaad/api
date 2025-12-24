@@ -52,8 +52,9 @@ export class NotificationsService {
     const user = await this.db.user.findUnique({ where: { id: userId } });
     if (!user) return;
 
-    // In a real app, we'd store FCM tokens per user. Stub token fetch:
-    const fcmToken = (user as any).fcmToken as string | undefined;
+    // FCM token is stored in user.notifPrefs.fcmToken
+    const notifPrefs = (user.notifPrefs as any) || {};
+    const fcmToken = notifPrefs.fcmToken as string | undefined;
     if (!fcmToken) {
       this.logger.warn(`No FCM token for user ${userId}`);
       return;
@@ -166,23 +167,42 @@ export class NotificationsService {
 
   private async sendPushNotification(userId: string, notification: any) {
     const user = await this.db.user.findUnique({ where: { id: userId } });
-    if (!user) return;
-
-    // In a real app, we'd store FCM tokens per user
-    const fcmToken = (user as any).fcmToken as string | undefined;
-    if (!fcmToken) {
-      this.logger.warn(`No FCM token for user ${userId}`);
+    if (!user) {
+      this.logger.warn(`User ${userId} not found for push notification`);
       return;
     }
 
-    await admin.messaging().send({
-      token: fcmToken,
-      notification: {
-        title: notification.title,
-        body: notification.body,
-      },
-      data: notification.data ? JSON.parse(JSON.stringify(notification.data)) : {},
-    });
+    // FCM token is stored in user.notifPrefs.fcmToken
+    const notifPrefs = (user.notifPrefs as any) || {};
+    const fcmToken = notifPrefs.fcmToken as string | undefined;
+    
+    this.logger.log(`📱 Push notification for user ${userId}:`);
+    this.logger.log(`   - Has notifPrefs: ${!!notifPrefs}`);
+    this.logger.log(`   - Has FCM token: ${!!fcmToken}`);
+    this.logger.log(`   - Token preview: ${fcmToken ? fcmToken.substring(0, 20) + '...' : 'NONE'}`);
+    
+    if (!fcmToken) {
+      this.logger.warn(`❌ No FCM token for user ${userId} - notification NOT sent`);
+      this.logger.warn(`   User needs to allow notifications in browser and refresh the page`);
+      return;
+    }
+
+    try {
+      this.logger.log(`🚀 Sending FCM message...`);
+      const result = await admin.messaging().send({
+        token: fcmToken,
+        notification: {
+          title: notification.title,
+          body: notification.body,
+        },
+        data: notification.data ? JSON.parse(JSON.stringify(notification.data)) : {},
+      });
+      this.logger.log(`✅ FCM message sent successfully! Message ID: ${result}`);
+    } catch (fcmError) {
+      this.logger.error(`❌ FCM send failed:`, fcmError.message);
+      this.logger.error(`   Error code: ${fcmError.code}`);
+      throw fcmError;
+    }
   }
 
   private async sendEmailNotification(userId: string, notification: any) {

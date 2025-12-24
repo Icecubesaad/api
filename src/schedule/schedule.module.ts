@@ -8,6 +8,7 @@ import { RemindersModule } from '../reminders/reminders.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AiModule } from '../ai/ai.module';
 import { UsersModule } from '../users/users.module';
+import { UploadsModule } from '../uploads/uploads.module';
 
 
 @Module({
@@ -18,6 +19,7 @@ import { UsersModule } from '../users/users.module';
     NotificationsModule,
     UsersModule,
     forwardRef(() => AiModule),
+    forwardRef(() => UploadsModule),
   ],
   controllers: [ScheduleController],
   providers: [ScheduleService, PdfScheduleParseService, DatabaseService],

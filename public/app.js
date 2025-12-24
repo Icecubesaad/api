@@ -15,6 +15,15 @@ const firebaseConfig = {
   measurementId: "G-GXM6EXQBS7"
 };
 
+// Get user's timezone
+function getUserTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch (e) {
+    return 'Australia/Sydney'; // Default to Australia, not UTC
+  }
+}
+
 // State
 const state = {
   user: null,
@@ -25,6 +34,7 @@ const state = {
   reminders: [],
   chatMessages: [],
   uploadedFile: null,
+  timezone: getUserTimezone(), // Auto-detect timezone
 };
 
 // Initialize Firebase
@@ -247,10 +257,54 @@ async function requestNotificationPermission() {
         });
         console.log('FCM token registered');
       }
+      
+      // Handle foreground messages - show in chat when check-in notification arrives
+      messaging.onMessage((payload) => {
+        console.log('FCM message received:', payload);
+        
+        const { data, notification } = payload;
+        
+        // Show browser notification
+        if (notification) {
+          new Notification(notification.title, {
+            body: notification.body,
+            icon: '/favicon.ico',
+          });
+        }
+        
+        // If it's a check-in notification, add it to chat
+        if (data?.action === 'checkin' || data?.type === 'reminder_checkin') {
+          handleCheckinNotification(data, notification);
+        }
+      });
     }
   } catch (error) {
     console.log('Notification permission denied or error:', error);
   }
+}
+
+// Handle check-in notifications - add GPT message to chat
+function handleCheckinNotification(data, notification) {
+  // Switch to chat view
+  switchView('chat');
+  
+  // Select the project if available
+  if (data.projectId && elements.chatProjectSelect) {
+    elements.chatProjectSelect.value = data.projectId;
+    const project = state.projects.find(p => p.id === data.projectId);
+    if (project) {
+      state.currentProject = project;
+    }
+  }
+  
+  // Add the check-in message to chat as an assistant message
+  const checkinMessage = notification?.body || 
+    `Hey mate! How's the progress on "${data.eventTitle}"? Ready to check in?`;
+  
+  addChatMessage(checkinMessage, 'assistant');
+  
+  // Show toast
+  showToast(`📋 Check-in: ${data.eventTitle}`, 'info');
 }
 
 // ============ Data Loading ============
@@ -425,6 +479,7 @@ function renderReminders() {
       </div>
       <div class="list-item-actions">
         ${reminder.status === 'PENDING' ? `
+          <button class="btn btn-primary btn-sm" onclick="testReminderNotification('${reminder.id}')" title="Send test notification now">🔔 Test</button>
           <button class="btn btn-secondary btn-sm" onclick="completeReminder('${reminder.id}')">Complete</button>
         ` : ''}
         <button class="btn btn-ghost btn-sm" onclick="deleteReminder('${reminder.id}')">Delete</button>
@@ -583,6 +638,7 @@ async function sendChatMessage() {
       method: 'POST',
       body: JSON.stringify({
         projectId,
+        timezone: state.timezone, // Send user's timezone
         messages: state.chatMessages.map(m => ({
           role: m.role,
           content: m.content,
@@ -954,6 +1010,40 @@ async function completeReminder(reminderId) {
   }
 }
 
+// Test notification for a specific reminder - triggers immediate push notification
+async function testReminderNotification(reminderId) {
+  showToast('🔔 Sending test notification...', 'info');
+  
+  try {
+    const result = await api(`/reminders/${reminderId}/notify`, {
+      method: 'POST',
+    });
+    
+    showToast('✅ Notification sent! Check your browser/device.', 'success');
+    console.log('Test notification result:', result);
+  } catch (error) {
+    showToast('❌ Failed to send notification: ' + error.message, 'error');
+    console.error('Test notification error:', error);
+  }
+}
+
+// Test the cron job manually - checks all due reminders
+async function testCronJob() {
+  showToast('⏰ Triggering cron job...', 'info');
+  
+  try {
+    const result = await api('/reminders/test/cron', {
+      method: 'POST',
+    });
+    
+    showToast('✅ Cron job executed! Check logs for details.', 'success');
+    console.log('Cron job result:', result);
+  } catch (error) {
+    showToast('❌ Cron job failed: ' + error.message, 'error');
+    console.error('Cron job error:', error);
+  }
+}
+
 async function deleteReminder(reminderId) {
   if (!confirm('Delete this reminder?')) return;
   
@@ -964,6 +1054,61 @@ async function deleteReminder(reminderId) {
     showToast('Reminder deleted', 'success');
   } catch (error) {
     showToast(error.message, 'error');
+  }
+}
+
+// ============ Test Notification System ============
+async function testNotificationSystem() {
+  if (!state.currentProject) {
+    showToast('Please select a project first', 'error');
+    return;
+  }
+  
+  showToast('🧪 Testing notification system...', 'info');
+  
+  try {
+    // Step 1: Create a test reminder due in 10 seconds
+    const result = await api('/reminders/test/create-and-notify', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: state.currentProject.id }),
+    });
+    
+    console.log('Test reminder created:', result);
+    showToast(`✅ Created test reminder: "${result.reminder?.title}"`, 'success');
+    
+    // Step 2: Wait 2 seconds then trigger the cron job manually
+    setTimeout(async () => {
+      showToast('⏰ Triggering cron job...', 'info');
+      
+      try {
+        const cronResult = await api('/reminders/test/cron', { method: 'POST' });
+        console.log('Cron job result:', cronResult);
+        showToast('📬 Cron job executed! Check for notification.', 'success');
+      } catch (cronError) {
+        console.error('Cron job error:', cronError);
+        showToast('❌ Cron job failed: ' + cronError.message, 'error');
+      }
+      
+      // Reload reminders to show the new one
+      await loadReminders();
+    }, 2000);
+    
+  } catch (error) {
+    console.error('Test notification error:', error);
+    showToast('❌ Test failed: ' + error.message, 'error');
+  }
+}
+
+// Send immediate notification for a specific reminder
+async function sendReminderNotification(reminderId) {
+  try {
+    showToast('📤 Sending notification...', 'info');
+    const result = await api(`/reminders/${reminderId}/notify`, { method: 'POST' });
+    console.log('Notification result:', result);
+    showToast('✅ Notification sent! Check your browser.', 'success');
+  } catch (error) {
+    console.error('Notification error:', error);
+    showToast('❌ Failed to send: ' + error.message, 'error');
   }
 }
 
@@ -1183,6 +1328,12 @@ function initEventListeners() {
     showToast('Refreshing reminders...', 'info');
   });
   
+  // Test notification button (if exists)
+  const testNotifBtn = document.getElementById('test-notification-btn');
+  if (testNotifBtn) {
+    testNotifBtn.addEventListener('click', testNotificationSystem);
+  }
+  
   // Schedule date
   elements.scheduleDate.addEventListener('change', loadSchedule);
   elements.scheduleDate.value = new Date().toISOString().split('T')[0];
@@ -1230,6 +1381,35 @@ function initApp() {
       });
     }
   });
+  
+  // Listen for messages from service worker (notification clicks)
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      console.log('Message from service worker:', event.data);
+      
+      if (event.data?.type === 'CHECKIN_NOTIFICATION') {
+        handleCheckinNotification(event.data.data, event.data.notification);
+      }
+    });
+  }
+  
+  // Check URL params for check-in (when opened from notification)
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('checkin') === 'true') {
+    const eventTitle = urlParams.get('eventTitle') || '';
+    const projectId = urlParams.get('projectId') || '';
+    const reminderId = urlParams.get('reminderId') || '';
+    
+    // Wait for app to load, then handle check-in
+    setTimeout(() => {
+      handleCheckinNotification(
+        { eventTitle, projectId, reminderId, action: 'checkin' },
+        { body: `Hey mate! How's the progress on "${eventTitle}"?` }
+      );
+      // Clean up URL
+      window.history.replaceState({}, document.title, '/');
+    }, 1500);
+  }
   
   // Hide loading screen after initialization
   setTimeout(() => {

@@ -27,6 +27,6 @@ import { AuthModule } from '../auth/auth.module';
     CheckinProcessor,
     DatabaseService,
   ],
-  exports: [TasksService],
+  exports: [TasksService, BullModule],
 })
 export class TasksModule {}
