@@ -201,6 +201,24 @@ export class NotificationsService {
     } catch (fcmError) {
       this.logger.error(`❌ FCM send failed:`, fcmError.message);
       this.logger.error(`   Error code: ${fcmError.code}`);
+      
+      // If token is invalid/expired, clear it so user can re-register
+      if (fcmError.code === 'messaging/registration-token-not-registered' ||
+          fcmError.code === 'messaging/invalid-registration-token') {
+        this.logger.warn(`🗑️ Clearing invalid FCM token for user ${userId}`);
+        try {
+          const updatedPrefs = { ...notifPrefs };
+          delete updatedPrefs.fcmToken;
+          await this.db.user.update({
+            where: { id: userId },
+            data: { notifPrefs: updatedPrefs },
+          });
+          this.logger.log(`   Token cleared. User will get new token on next page load.`);
+        } catch (clearError) {
+          this.logger.error(`   Failed to clear token:`, clearError.message);
+        }
+      }
+      
       throw fcmError;
     }
   }

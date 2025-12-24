@@ -105,6 +105,13 @@ REMINDER CREATION (CRITICAL):
 - ALWAYS use the current year from CURRENT DATE CONTEXT above - NEVER use 2022, 2023, or 2024
 - Focus on REMINDERS since calendar may not be connected
 
+BULK REMINDERS (IMPORTANT):
+- When user wants to create MULTIPLE reminders at once, use createBulkReminders tool
+- Example: "create reminders for 1am meeting with bob, 2am meeting with alice, 3am call with john"
+- Parse ALL the reminders from the message and pass them as an array to createBulkReminders
+- Each reminder needs: title and dueAt (in format YYYY-MM-DDTHH:mm:ss, no Z suffix)
+- DO NOT call createReminder multiple times - use createBulkReminders for efficiency
+
 IMPORTANT: When sending ANY notification, ALWAYS start with "Hey mate!" or "G'day Mate,"
 
 Be helpful, efficient, and action-oriented. Execute tools immediately without asking for confirmation.`;
@@ -224,8 +231,8 @@ When confirming to user, show the EXACT time they requested in their local timez
         toolResults = results.toolResults;
         createdEntities = results.createdEntities;
         
-        // Generate confirmation message based on tool results
-        confirmationMessage = this.generateConfirmationMessage(toolResults, createdEntities);
+        // Generate confirmation message based on tool results (pass timezone for correct time display)
+        confirmationMessage = this.generateConfirmationMessage(toolResults, createdEntities, chatRequest.timezone);
       }
 
       // Use GPT's message if available, otherwise use our confirmation message
@@ -247,7 +254,7 @@ When confirming to user, show the EXACT time they requested in their local timez
     }
   }
 
-  private generateConfirmationMessage(toolResults: any[], createdEntities: any): string {
+  private generateConfirmationMessage(toolResults: any[], createdEntities: any, userTimezone?: string): string {
     const messages: string[] = [];
     const greetings = ["Hey mate!", "G'day!", "No worries!", "Too easy!"];
     const greeting = greetings[Math.floor(Math.random() * greetings.length)];
@@ -265,11 +272,13 @@ When confirming to user, show the EXACT time they requested in their local timez
         case 'createReminder':
           if (result.result?.reminderId) {
             const title = result.result.title || 'your reminder';
-            // Show time in a user-friendly format (the time they requested)
+            // Show time in user's timezone (not server timezone)
             const dueDate = result.result.dueAt ? new Date(result.result.dueAt) : null;
             let timeStr = '';
             if (dueDate) {
+              const tz = userTimezone || 'Australia/Sydney';
               timeStr = dueDate.toLocaleString('en-AU', {
+                timeZone: tz,
                 weekday: 'short',
                 month: 'short',
                 day: 'numeric',
@@ -318,6 +327,24 @@ When confirming to user, show the EXACT time they requested in their local timez
                 reminderList += `${statusIcon} "${r.title}" - ${r.dueAtFormatted} (${r.status})\n`;
               }
               messages.push(reminderList);
+            }
+          }
+          break;
+
+        case 'createBulkReminders':
+          if (result.result) {
+            const { created, failed, reminders: createdReminders } = result.result;
+            if (created > 0) {
+              let bulkMsg = `${greeting} I've created ${created} reminder${created > 1 ? 's' : ''} for you:\n\n`;
+              for (const r of createdReminders) {
+                bulkMsg += `⏰ "${r.title}" - ${r.dueAtLocal}\n`;
+              }
+              if (failed > 0) {
+                bulkMsg += `\n⚠️ ${failed} reminder${failed > 1 ? 's' : ''} failed to create.`;
+              }
+              messages.push(bulkMsg);
+            } else {
+              messages.push(`${greeting} Sorry mate, couldn't create those reminders. Give it another go?`);
             }
           }
           break;
@@ -451,6 +478,32 @@ When confirming to user, show the EXACT time they requested in their local timez
           },
         },
       },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'createBulkReminders',
+          description: 'Create multiple reminders at once. USE THIS when user wants to create 2 or more reminders in one message. Example: "create reminders for 1am meeting, 2am call, 3am review" - parse all and use this tool instead of calling createReminder multiple times.',
+          parameters: {
+            type: 'object',
+            properties: {
+              projectId: { type: 'string', description: 'Project ID for all reminders (optional)' },
+              reminders: {
+                type: 'array',
+                description: 'Array of reminders to create',
+                items: {
+                  type: 'object',
+                  properties: {
+                    title: { type: 'string', description: 'Reminder title' },
+                    dueAt: { type: 'string', description: 'Due date/time in format YYYY-MM-DDTHH:mm:ss (user local time, no Z suffix)' },
+                  },
+                  required: ['title', 'dueAt'],
+                },
+              },
+            },
+            required: ['reminders'],
+          },
+        },
+      },
     ];
 
     if (!allowedTools) return allTools;
@@ -548,6 +601,17 @@ When confirming to user, show the EXACT time they requested in their local timez
               userId,
             });
             toolResults.push({ tool: name, result: reminders });
+            break;
+
+          case 'createBulkReminders':
+            const bulkResult = await this.createBulkReminders({
+              ...parsedArgs,
+              userId,
+              projectId: projectId || parsedArgs.projectId,
+              timezone: timezone,
+            });
+            toolResults.push({ tool: name, result: bulkResult });
+            createdEntities.bulkReminders = bulkResult;
             break;
 
           default:
@@ -1183,6 +1247,109 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
     return {
       count: reminders.length,
       reminders: formattedReminders,
+    };
+  }
+
+  // Create multiple reminders at once
+  private async createBulkReminders(data: {
+    userId: string;
+    projectId?: string;
+    timezone?: string;
+    reminders: Array<{ title: string; dueAt: string }>;
+  }) {
+    const projectId = data.projectId || await this.getOrCreateDefaultProject(data.userId);
+    const userTimezone = data.timezone || 'Australia/Sydney';
+    
+    const createdReminders = [];
+    const errors = [];
+
+    for (const reminderData of data.reminders) {
+      try {
+        // Convert local time to UTC (same logic as createReminder)
+        const dueAtStr = reminderData.dueAt;
+        let dueAtDate: Date;
+        
+        const hasTimezoneInfo = dueAtStr.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(dueAtStr);
+        
+        if (hasTimezoneInfo) {
+          dueAtDate = new Date(dueAtStr);
+        } else {
+          const match = dueAtStr.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):?(\d{2})?/);
+          
+          if (match) {
+            const [, year, month, day, hour, minute, second = '00'] = match;
+            const targetLocalTime = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+            let utcGuess = new Date(`${targetLocalTime}Z`);
+            
+            const formatter = new Intl.DateTimeFormat('en-CA', {
+              timeZone: userTimezone,
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              hour12: false,
+            });
+            
+            const parts = formatter.formatToParts(utcGuess);
+            const formatted = {
+              year: parts.find(p => p.type === 'year')?.value,
+              month: parts.find(p => p.type === 'month')?.value,
+              day: parts.find(p => p.type === 'day')?.value,
+              hour: parts.find(p => p.type === 'hour')?.value,
+              minute: parts.find(p => p.type === 'minute')?.value,
+              second: parts.find(p => p.type === 'second')?.value,
+            };
+            
+            const localTimeFromUtc = `${formatted.year}-${formatted.month}-${formatted.day}T${formatted.hour}:${formatted.minute}:${formatted.second}`;
+            const targetMs = new Date(`${targetLocalTime}Z`).getTime();
+            const actualLocalMs = new Date(`${localTimeFromUtc}Z`).getTime();
+            const offsetMs = targetMs - actualLocalMs;
+            
+            dueAtDate = new Date(utcGuess.getTime() + offsetMs);
+          } else {
+            dueAtDate = new Date(dueAtStr);
+          }
+        }
+
+        const reminder = await this.db.reminder.create({
+          data: {
+            title: reminderData.title,
+            dueAt: dueAtDate,
+            projectId: projectId,
+            userId: data.userId,
+          },
+        });
+
+        createdReminders.push({
+          id: reminder.id,
+          title: reminder.title,
+          dueAt: reminder.dueAt.toISOString(),
+          dueAtLocal: reminder.dueAt.toLocaleString('en-AU', {
+            timeZone: userTimezone,
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          }),
+        });
+      } catch (error) {
+        this.logger.error(`Failed to create reminder "${reminderData.title}":`, error);
+        errors.push({ title: reminderData.title, error: error.message });
+      }
+    }
+
+    this.logger.log(`Bulk created ${createdReminders.length} reminders for user ${data.userId}`);
+
+    return {
+      success: true,
+      created: createdReminders.length,
+      failed: errors.length,
+      reminders: createdReminders,
+      errors: errors.length > 0 ? errors : undefined,
     };
   }
 }
