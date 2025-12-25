@@ -244,18 +244,36 @@ function showMainScreen() {
 // ============ Push Notifications ============
 async function requestNotificationPermission() {
   try {
+    console.log('🔔 Requesting notification permission...');
     const permission = await Notification.requestPermission();
+    console.log('🔔 Permission result:', permission);
+    
     if (permission === 'granted') {
+      console.log('🔔 Registering service worker...');
       const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+      console.log('🔔 Service worker registered:', registration);
+      
       const messaging = firebase.messaging();
-      const token = await messaging.getToken({ serviceWorkerRegistration: registration });
+      console.log('🔔 Getting FCM token...');
+      const token = await messaging.getToken({ 
+        serviceWorkerRegistration: registration,
+        vapidKey: undefined // Uses Firebase config
+      });
+      
+      console.log('🔔 FCM token obtained:', token ? token.substring(0, 20) + '...' : 'NONE');
       
       if (token) {
-        await api('/webhooks/fcm-token', {
-          method: 'POST',
-          body: JSON.stringify({ token }),
-        });
-        console.log('FCM token registered');
+        try {
+          await api('/webhooks/fcm-token', {
+            method: 'POST',
+            body: JSON.stringify({ token }),
+          });
+          console.log('✅ FCM token registered with backend');
+        } catch (apiError) {
+          console.error('❌ Failed to save FCM token to backend:', apiError);
+        }
+      } else {
+        console.warn('⚠️ No FCM token received from Firebase');
       }
       
       // Handle foreground messages - show in chat when check-in notification arrives
@@ -290,7 +308,9 @@ async function requestNotificationPermission() {
       });
     }
   } catch (error) {
-    console.log('Notification permission denied or error:', error);
+    console.error('❌ Notification setup failed:', error);
+    console.error('   Error name:', error.name);
+    console.error('   Error message:', error.message);
   }
 }
 
