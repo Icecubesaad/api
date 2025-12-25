@@ -1392,6 +1392,9 @@ function initApp() {
     state.user = JSON.parse(storedUser);
     showMainScreen();
     loadInitialData();
+    
+    // Request notification permission for returning users
+    requestNotificationPermission();
   }
   
   initEventListeners();
