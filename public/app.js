@@ -253,6 +253,31 @@ async function requestNotificationPermission() {
       const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
       console.log('🔔 Service worker registered:', registration);
       
+      // Wait for service worker to be ready/active
+      if (registration.installing) {
+        console.log('🔔 Waiting for service worker to install...');
+        await new Promise((resolve) => {
+          registration.installing.addEventListener('statechange', (e) => {
+            if (e.target.state === 'activated') {
+              resolve();
+            }
+          });
+        });
+      } else if (registration.waiting) {
+        console.log('🔔 Waiting for service worker to activate...');
+        await new Promise((resolve) => {
+          registration.waiting.addEventListener('statechange', (e) => {
+            if (e.target.state === 'activated') {
+              resolve();
+            }
+          });
+        });
+      }
+      
+      // Ensure service worker is ready
+      await navigator.serviceWorker.ready;
+      console.log('🔔 Service worker is ready');
+      
       const messaging = firebase.messaging();
       console.log('🔔 Getting FCM token...');
       const token = await messaging.getToken({ 
