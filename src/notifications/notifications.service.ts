@@ -189,13 +189,24 @@ export class NotificationsService {
 
     try {
       this.logger.log(`🚀 Sending FCM message...`);
+      
+      // FCM data must only contain string values - convert all values to strings
+      const stringifiedData: Record<string, string> = {};
+      if (notification.data) {
+        for (const [key, value] of Object.entries(notification.data)) {
+          if (value !== null && value !== undefined) {
+            stringifiedData[key] = typeof value === 'string' ? value : JSON.stringify(value);
+          }
+        }
+      }
+      
       const result = await admin.messaging().send({
         token: fcmToken,
         notification: {
           title: notification.title,
           body: notification.body,
         },
-        data: notification.data ? JSON.parse(JSON.stringify(notification.data)) : {},
+        data: stringifiedData,
       });
       this.logger.log(`✅ FCM message sent successfully! Message ID: ${result}`);
     } catch (fcmError) {

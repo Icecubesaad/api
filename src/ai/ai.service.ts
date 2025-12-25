@@ -593,6 +593,16 @@ When confirming to user, show the EXACT time they requested in their local timez
             });
             toolResults.push({ tool: name, result: scheduleImport });
             createdEntities.schedulePreview = scheduleImport;
+            
+            // Send single notification for PDF import
+            const remindersCreated = scheduleImport.summary?.remindersCreated || scheduleImport.commitResult?.createdReminders?.length || 0;
+            if (remindersCreated > 0) {
+              await this.notificationsService.sendNotification(userId, 'PUSH', {
+                title: `G'day Mate! Schedule imported`,
+                body: `${remindersCreated} tasks from your PDF are now set as reminders!`,
+                data: { type: 'pdf_import', count: String(remindersCreated) },
+              });
+            }
             break;
 
           case 'listReminders':
@@ -612,6 +622,15 @@ When confirming to user, show the EXACT time they requested in their local timez
             });
             toolResults.push({ tool: name, result: bulkResult });
             createdEntities.bulkReminders = bulkResult;
+            
+            // Send single notification for bulk creation
+            if (bulkResult.created > 0) {
+              await this.notificationsService.sendNotification(userId, 'PUSH', {
+                title: `Hey mate! ${bulkResult.created} reminders set`,
+                body: `All your tasks are scheduled. You'll get notified when each one is due!`,
+                data: { type: 'bulk_reminders', count: String(bulkResult.created) },
+              });
+            }
             break;
 
           default:
