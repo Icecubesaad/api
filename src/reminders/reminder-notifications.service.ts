@@ -72,11 +72,12 @@ ${projectName ? `Project: "${projectName}"` : ''}
 
 Rules:
 - Start with "Hey mate!" or "G'day Mate,"
-- Keep it under 100 characters for the title
-- Ask about progress or readiness in a friendly way
+- MUST include the task title "${taskTitle}" in the notification
+- Keep title under 100 characters
+- Ask about progress or readiness for THIS SPECIFIC task
 - Use Australian slang occasionally
 - Be encouraging, not pushy
-- The body should be a short follow-up question about the task
+- The body should mention the task name and ask a follow-up question
 
 Return JSON format:
 {"title": "...", "body": "..."}`;
@@ -114,19 +115,19 @@ Return JSON format:
     const greetings = [
       `Hey mate! Time for "${taskTitle}"`,
       `G'day Mate, "${taskTitle}" is due now`,
-      `Hey mate! Ready to tackle "${taskTitle}"?`,
-      `G'day! "${taskTitle}" — time to roll`,
+      `Hey mate! Ready for "${taskTitle}"?`,
+      `G'day! "${taskTitle}" — let's go!`,
     ];
     return greetings[Math.floor(Math.random() * greetings.length)];
   }
 
   private getDefaultBody(taskTitle: string): string {
     const bodies = [
-      "How's it going? Need any help getting started?",
-      "Ready to smash this one out?",
-      "Let me know how you go with this!",
-      "Tap to check in on your progress.",
-      "You've got this, mate!",
+      `How's "${taskTitle}" going? Need any help?`,
+      `Ready to smash out "${taskTitle}"?`,
+      `Time to tackle "${taskTitle}" - you've got this!`,
+      `"${taskTitle}" is up - let me know how you go!`,
+      `Checking in on "${taskTitle}" - ready to roll?`,
     ];
     return bodies[Math.floor(Math.random() * bodies.length)];
   }
