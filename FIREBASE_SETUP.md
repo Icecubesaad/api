@@ -15,10 +15,10 @@ JobMate uses Firebase for:
 The backend uses Firebase Admin SDK with service account credentials:
 
 ```env
-FIREBASE_PROJECT_ID=jobmate-122bd
-FIREBASE_CLIENT_EMAIL=firebase-adminsdk-fbsvc@jobmate-122bd.iam.gserviceaccount.com
+FIREBASE_PROJECT_ID=jobmatee-64027
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-fbsvc@jobmatee-64027.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
-FCM_SERVER_KEY=119527345940
+FCM_SERVER_KEY=459203161978
 ```
 
 ### Frontend Configuration
@@ -29,11 +29,11 @@ The test page uses the Firebase client SDK with the following configuration:
 ```javascript
 const firebaseConfig = {
   apiKey: "AIzaSyBqsjyXHLtYUbzUeZ4HnsT8awjoI-BVQ8U",
-  authDomain: "jobmate-122bd.firebaseapp.com",
-  projectId: "jobmate-122bd",
-  storageBucket: "jobmate-122bd.firebasestorage.app",
-  messagingSenderId: "119527345940",
-  appId: "1:119527345940:web:a533a9afaa0819ac44f0c3",
+  authDomain: "jobmatee-64027.firebaseapp.com",
+  projectId: "jobmatee-64027",
+  storageBucket: "jobmatee-64027.firebasestorage.app",
+  messagingSenderId: "459203161978",
+  appId: "1:459203161978:web:a533a9afaa0819ac44f0c3",
   measurementId: "G-G5WX61SLH6"
 };
 ```
@@ -141,7 +141,7 @@ To get these credentials from Firebase Console:
 
 ## Current Configuration
 
-**Project**: jobmate-122bd  
-**Sender ID**: 119527345940  
-**Auth Domain**: jobmate-122bd.firebaseapp.com  
-**Service Account**: firebase-adminsdk-fbsvc@jobmate-122bd.iam.gserviceaccount.com
+**Project**: jobmatee-64027  
+**Sender ID**: 459203161978  
+**Auth Domain**: jobmatee-64027.firebaseapp.com  
+**Service Account**: firebase-adminsdk-fbsvc@jobmatee-64027.iam.gserviceaccount.com

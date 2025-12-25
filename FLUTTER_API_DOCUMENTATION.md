@@ -1573,12 +1573,12 @@ Add to `android/app/google-services.json` and `ios/Runner/GoogleService-Info.pli
 ```dart
 // Firebase config values (for reference)
 const firebaseConfig = {
-  'apiKey': 'AIzaSyBcS21HPdSxotT7an5HcOsPs8vKzCFahqI',
-  'authDomain': 'jobmate-122bd.firebaseapp.com',
-  'projectId': 'jobmate-122bd',
-  'storageBucket': 'jobmate-122bd.firebasestorage.app',
-  'messagingSenderId': '119527345940',
-  'appId': '1:119527345940:web:7d07c3f709bf7e068e7c01',
+  'apiKey': 'AIzaSyBqsjyXHLtYUbzUeZ4HnsT8awjoI-BVQ8U',
+  'authDomain': 'jobmatee-64027.firebaseapp.com',
+  'projectId': 'jobmatee-64027',
+  'storageBucket': 'jobmatee-64027.firebasestorage.app',
+  'messagingSenderId': '459203161978',
+  'appId': '1:459203161978:web:a533a9afaa0819ac44f0c3',
 };
 ```
 
