@@ -85,6 +85,19 @@ LISTING REMINDERS (CRITICAL - NEVER HALLUCINATE):
 - NEVER make up or invent reminder data - only show what the tool returns
 - If the tool returns 0 reminders, tell the user they have no reminders
 
+TIME FILTERING FOR REMINDERS:
+- When user asks for reminders in a specific time range, use the timeFilter parameter:
+  * "next 5 hours" or "in the next 5 hours" → timeFilter: "next_hours:5"
+  * "today" or "for today" → timeFilter: "today"
+  * "tomorrow" → timeFilter: "tomorrow"
+  * "this week" or "next 7 days" → timeFilter: "this_week"
+  * "next 3 days" → timeFilter: "next_days:3"
+  * "all reminders" or no time specified → timeFilter: "all" (or omit)
+- Examples:
+  * "What do I have in the next 2 hours?" → listReminders with timeFilter: "next_hours:2"
+  * "Show me today's reminders" → listReminders with timeFilter: "today"
+  * "What's on for tomorrow?" → listReminders with timeFilter: "tomorrow"
+
 NOTE CREATION (CRITICAL):
 - When user says "create a note", "save a note", "add a note" - IMMEDIATELY call generateNote
 - Extract the title, content, and tags from the user's message
@@ -322,11 +335,13 @@ When confirming to user, show the EXACT time they requested in their local timez
 
         case 'listReminders':
           if (result.result) {
-            const { count, reminders } = result.result;
+            const { count, reminders, filterDescription } = result.result;
             if (count === 0) {
-              messages.push(`${greeting} You don't have any reminders yet. Would you like me to create one?`);
+              const filterMsg = filterDescription ? ` ${filterDescription}` : '';
+              messages.push(`${greeting} You don't have any reminders${filterMsg}. Would you like me to create one?`);
             } else {
-              let reminderList = `${greeting} Here are your ${count} reminder${count > 1 ? 's' : ''}:\n\n`;
+              const filterMsg = filterDescription ? ` ${filterDescription}` : '';
+              let reminderList = `${greeting} Here are your ${count} reminder${count > 1 ? 's' : ''}${filterMsg}:\n\n`;
               for (const r of reminders) {
                 const statusIcon = r.status === 'COMPLETED' ? '✅' : r.status === 'CANCELLED' ? '❌' : '⏰';
                 reminderList += `${statusIcon} "${r.title}" - ${r.dueAtFormatted} (${r.status})\n`;
@@ -472,12 +487,16 @@ When confirming to user, show the EXACT time they requested in their local timez
         type: 'function' as const,
         function: {
           name: 'listReminders',
-          description: 'Get all reminders for the user from the database. ALWAYS use this tool when user asks to see, list, or show their reminders. Never make up reminder data.',
+          description: 'Get reminders for the user from the database with optional time filtering. ALWAYS use this tool when user asks to see, list, or show their reminders. Supports filtering by time range like "next 5 hours", "today", "tomorrow", "this week". Never make up reminder data.',
           parameters: {
             type: 'object',
             properties: {
               projectId: { type: 'string', description: 'Filter by project ID (optional)' },
               status: { type: 'string', description: 'Filter by status: PENDING, COMPLETED, CANCELLED (optional)' },
+              timeFilter: { 
+                type: 'string', 
+                description: 'Time range filter. Options: "next_hours:N" (next N hours), "today", "tomorrow", "this_week", "next_days:N" (next N days), "all" (default). Examples: "next_hours:5" for next 5 hours, "next_days:3" for next 3 days.' 
+              },
             },
             required: [],
           },
@@ -614,6 +633,7 @@ When confirming to user, show the EXACT time they requested in their local timez
             const reminders = await this.listReminders({
               ...parsedArgs,
               userId,
+              timezone: timezone,
             });
             toolResults.push({ tool: name, result: reminders });
             break;
@@ -1229,8 +1249,9 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
     return completion.choices[0].message.content || '';
   }
 
-  private async listReminders(data: { userId: string; projectId?: string; status?: string }) {
+  private async listReminders(data: { userId: string; projectId?: string; status?: string; timeFilter?: string; timezone?: string }) {
     const whereClause: any = { userId: data.userId };
+    const userTimezone = data.timezone || 'Australia/Sydney';
     
     if (data.projectId) {
       whereClause.projectId = data.projectId;
@@ -1238,6 +1259,66 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
     
     if (data.status) {
       whereClause.status = data.status;
+    }
+
+    // Handle time filtering
+    if (data.timeFilter && data.timeFilter !== 'all') {
+      const now = new Date();
+      let startDate: Date | null = null;
+      let endDate: Date | null = null;
+
+      // Get current time in user's timezone for accurate "today" calculations
+      const nowInUserTz = new Date(now.toLocaleString('en-US', { timeZone: userTimezone }));
+      
+      if (data.timeFilter.startsWith('next_hours:')) {
+        const hours = parseInt(data.timeFilter.split(':')[1], 10);
+        if (!isNaN(hours)) {
+          startDate = now;
+          endDate = new Date(now.getTime() + hours * 60 * 60 * 1000);
+        }
+      } else if (data.timeFilter.startsWith('next_days:')) {
+        const days = parseInt(data.timeFilter.split(':')[1], 10);
+        if (!isNaN(days)) {
+          startDate = now;
+          endDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+        }
+      } else if (data.timeFilter === 'today') {
+        // Start of today in user's timezone
+        const todayStart = new Date(nowInUserTz);
+        todayStart.setHours(0, 0, 0, 0);
+        
+        // End of today in user's timezone
+        const todayEnd = new Date(nowInUserTz);
+        todayEnd.setHours(23, 59, 59, 999);
+        
+        // Convert back to UTC for database query
+        startDate = this.convertLocalToUtc(todayStart, userTimezone);
+        endDate = this.convertLocalToUtc(todayEnd, userTimezone);
+      } else if (data.timeFilter === 'tomorrow') {
+        // Start of tomorrow in user's timezone
+        const tomorrowStart = new Date(nowInUserTz);
+        tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+        tomorrowStart.setHours(0, 0, 0, 0);
+        
+        // End of tomorrow in user's timezone
+        const tomorrowEnd = new Date(nowInUserTz);
+        tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
+        tomorrowEnd.setHours(23, 59, 59, 999);
+        
+        startDate = this.convertLocalToUtc(tomorrowStart, userTimezone);
+        endDate = this.convertLocalToUtc(tomorrowEnd, userTimezone);
+      } else if (data.timeFilter === 'this_week') {
+        startDate = now;
+        endDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      }
+
+      if (startDate && endDate) {
+        whereClause.dueAt = {
+          gte: startDate,
+          lte: endDate,
+        };
+        this.logger.log(`Filtering reminders: ${data.timeFilter} -> ${startDate.toISOString()} to ${endDate.toISOString()}`);
+      }
     }
 
     const reminders = await this.db.reminder.findMany({
@@ -1250,12 +1331,13 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
       },
     });
 
-    // Format reminders for display
+    // Format reminders for display in user's timezone
     const formattedReminders = reminders.map(r => ({
       id: r.id,
       title: r.title,
       dueAt: r.dueAt.toISOString(),
       dueAtFormatted: r.dueAt.toLocaleString('en-AU', {
+        timeZone: userTimezone,
         weekday: 'short',
         year: 'numeric',
         month: 'short',
@@ -1268,10 +1350,63 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
       projectName: r.project?.name || 'No project',
     }));
 
+    // Generate a helpful filter description
+    let filterDescription = '';
+    if (data.timeFilter) {
+      if (data.timeFilter.startsWith('next_hours:')) {
+        const hours = data.timeFilter.split(':')[1];
+        filterDescription = `in the next ${hours} hour${hours === '1' ? '' : 's'}`;
+      } else if (data.timeFilter.startsWith('next_days:')) {
+        const days = data.timeFilter.split(':')[1];
+        filterDescription = `in the next ${days} day${days === '1' ? '' : 's'}`;
+      } else if (data.timeFilter === 'today') {
+        filterDescription = 'for today';
+      } else if (data.timeFilter === 'tomorrow') {
+        filterDescription = 'for tomorrow';
+      } else if (data.timeFilter === 'this_week') {
+        filterDescription = 'for this week';
+      }
+    }
+
     return {
       count: reminders.length,
       reminders: formattedReminders,
+      filterDescription,
+      timeFilter: data.timeFilter || 'all',
     };
+  }
+
+  // Helper to convert local time to UTC
+  private convertLocalToUtc(localDate: Date, timezone: string): Date {
+    // Create a formatter to get the offset
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    
+    const utcGuess = new Date(localDate.toISOString().replace('Z', ''));
+    const parts = formatter.formatToParts(utcGuess);
+    const formatted = {
+      year: parts.find(p => p.type === 'year')?.value,
+      month: parts.find(p => p.type === 'month')?.value,
+      day: parts.find(p => p.type === 'day')?.value,
+      hour: parts.find(p => p.type === 'hour')?.value,
+      minute: parts.find(p => p.type === 'minute')?.value,
+      second: parts.find(p => p.type === 'second')?.value,
+    };
+    
+    const localTimeFromUtc = `${formatted.year}-${formatted.month}-${formatted.day}T${formatted.hour}:${formatted.minute}:${formatted.second}`;
+    const targetMs = localDate.getTime();
+    const actualLocalMs = new Date(`${localTimeFromUtc}Z`).getTime();
+    const offsetMs = targetMs - actualLocalMs;
+    
+    return new Date(utcGuess.getTime() + offsetMs);
   }
 
   // Create multiple reminders at once
