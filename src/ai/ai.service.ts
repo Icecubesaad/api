@@ -136,6 +136,12 @@ COMPLETING REMINDERS (VERY IMPORTANT):
   * "mark gym complete" → completeReminder with searchTitle: "gym"
   * "done with the meeting" → completeReminder with searchTitle: "meeting"
   * "finished my call" → completeReminder with searchTitle: "call"
+- If multiple matches are found and user specifies:
+  * "the first one" or "number 1" → use index: 1
+  * "the second one" or "number 2" → use index: 2
+  * "the 7pm one" → use searchTime: "7pm"
+  * "the one on Dec 17" → use searchDate: "Dec 17"
+  * "the Wednesday one" → use searchDate: "Wednesday"
 - You do NOT need a reminderId - just use the task name/title and the tool will find it
 - If from a check-in context with reminderId, you can use that instead
 
@@ -566,12 +572,15 @@ When confirming to user, show the EXACT time they requested in their local timez
         type: 'function' as const,
         function: {
           name: 'completeReminder',
-          description: 'Mark a reminder as completed. Use this when user says they finished a task, or asks to mark a reminder as done. You can use EITHER reminderId (from check-in context) OR searchTitle (to find by name). If user says "mark gym complete" or "done with meeting", use searchTitle with the task name.',
+          description: 'Mark a reminder as completed. Use this when user says they finished a task, or asks to mark a reminder as done. You can search by title, and optionally narrow down by date/time or index if multiple matches.',
           parameters: {
             type: 'object',
             properties: {
-              reminderId: { type: 'string', description: 'The reminder ID to mark as complete (use if available from check-in context)' },
-              searchTitle: { type: 'string', description: 'Search for reminder by title/name. Use this when user says "mark X complete" or "done with X". Example: "gym", "meeting", "call mom"' },
+              reminderId: { type: 'string', description: 'The reminder ID (use if available from check-in context)' },
+              searchTitle: { type: 'string', description: 'Search for reminder by title/name. Example: "gym", "meeting", "Follow up on meeting"' },
+              searchDate: { type: 'string', description: 'Narrow down by date. Example: "Dec 17", "17th", "Wednesday", "today"' },
+              searchTime: { type: 'string', description: 'Narrow down by time. Example: "7pm", "7:00 pm", "19:00"' },
+              index: { type: 'number', description: 'Select by position from previous list (1=first, 2=second). Use when user says "the first one", "number 2", etc.' },
             },
             required: [],
           },
@@ -1571,8 +1580,16 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
     };
   }
 
-  // Mark a reminder as completed - supports both ID and title search
-  private async completeReminder(data: { userId: string; reminderId?: string; searchTitle?: string; timezone?: string }) {
+  // Mark a reminder as completed - supports ID, title search, or index from previous list
+  private async completeReminder(data: { 
+    userId: string; 
+    reminderId?: string; 
+    searchTitle?: string; 
+    searchDate?: string;  // Date to narrow down (e.g., "Dec 17", "17th", "Wednesday")
+    searchTime?: string;  // Time to narrow down (e.g., "7pm", "19:00")
+    index?: number;       // Index from previous list (1-based: "the first one")
+    timezone?: string 
+  }) {
     const userTimezone = data.timezone || 'Australia/Sydney';
     
     try {
@@ -1587,10 +1604,9 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
           },
         });
       } 
-      // Otherwise, search by title
+      // Otherwise, search by title (and optionally date/time)
       else if (data.searchTitle) {
-        // Search for PENDING reminders matching the title (case-insensitive)
-        const searchTerm = data.searchTitle.toLowerCase();
+        const searchTerm = data.searchTitle.toLowerCase().trim();
         
         const pendingReminders = await this.db.reminder.findMany({
           where: {
@@ -1600,41 +1616,124 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
           orderBy: { dueAt: 'asc' },
         });
 
-        // Find ALL matching reminders (exact or partial)
-        const matchingReminders = pendingReminders.filter(r => 
-          r.title.toLowerCase() === searchTerm ||
-          r.title.toLowerCase() === `reminder: ${searchTerm}` ||
-          r.title.toLowerCase().includes(searchTerm) ||
-          searchTerm.includes(r.title.toLowerCase().replace('reminder: ', ''))
-        );
+        // Score-based matching - prioritize exact matches
+        const scoredMatches = pendingReminders.map(r => {
+          const title = r.title.toLowerCase();
+          const titleWithoutPrefix = title.replace('reminder: ', '');
+          let score = 0;
+          
+          // Exact match (highest priority)
+          if (title === searchTerm || titleWithoutPrefix === searchTerm) {
+            score = 100;
+          }
+          // Title starts with search term
+          else if (titleWithoutPrefix.startsWith(searchTerm)) {
+            score = 80;
+          }
+          // Search term starts with title (user typed more)
+          else if (searchTerm.startsWith(titleWithoutPrefix)) {
+            score = 70;
+          }
+          // Title contains search term as whole word
+          else if (titleWithoutPrefix.includes(searchTerm) && 
+                   (titleWithoutPrefix.includes(` ${searchTerm}`) || 
+                    titleWithoutPrefix.includes(`${searchTerm} `) ||
+                    titleWithoutPrefix === searchTerm)) {
+            score = 60;
+          }
+          // Partial match - search term is substring
+          else if (titleWithoutPrefix.includes(searchTerm)) {
+            score = 40;
+          }
+          // Very loose match - any word overlap
+          else {
+            const searchWords = searchTerm.split(/\s+/);
+            const titleWords = titleWithoutPrefix.split(/\s+/);
+            const overlap = searchWords.filter(w => titleWords.some(tw => tw.includes(w) || w.includes(tw)));
+            if (overlap.length > 0) {
+              score = 20 * overlap.length / searchWords.length;
+            }
+          }
+          
+          return { reminder: r, score };
+        }).filter(m => m.score > 0).sort((a, b) => b.score - a.score);
 
-        // If multiple matches found, ask user to specify by time
-        if (matchingReminders.length > 1) {
-          const options = matchingReminders.map(r => {
-            const timeStr = r.dueAt.toLocaleString('en-AU', {
+        let matchingReminders = scoredMatches.map(m => m.reminder);
+
+        // If date/time specified, filter further
+        if (data.searchDate || data.searchTime) {
+          matchingReminders = matchingReminders.filter(r => {
+            const dueStr = r.dueAt.toLocaleString('en-AU', {
               timeZone: userTimezone,
-              weekday: 'short',
+              weekday: 'long',
               month: 'short',
               day: 'numeric',
               hour: 'numeric',
               minute: '2-digit',
               hour12: true,
-            });
-            return `• "${r.title.replace('Reminder: ', '')}" at ${timeStr}`;
-          }).join('\n');
-          
-          return {
-            success: false,
-            multipleMatches: true,
-            count: matchingReminders.length,
-            error: `Found ${matchingReminders.length} reminders matching "${data.searchTitle}". Which one do you mean?\n\n${options}\n\nPlease specify the time, like "mark the 2pm one complete" or "the one at 6pm is done".`,
-          };
+            }).toLowerCase();
+            
+            if (data.searchDate && !dueStr.includes(data.searchDate.toLowerCase())) {
+              return false;
+            }
+            if (data.searchTime) {
+              const timeNormalized = data.searchTime.toLowerCase().replace(/\s/g, '');
+              if (!dueStr.replace(/\s/g, '').includes(timeNormalized)) {
+                return false;
+              }
+            }
+            return true;
+          });
         }
 
-        reminder = matchingReminders[0];
+        // If index specified (user said "the first one", "the second one")
+        if (data.index && data.index > 0 && matchingReminders.length >= data.index) {
+          reminder = matchingReminders[data.index - 1];
+        }
+        // If only one match after filtering, use it
+        else if (matchingReminders.length === 1) {
+          reminder = matchingReminders[0];
+        }
+        // If multiple matches with same high score, ask for clarification
+        else if (matchingReminders.length > 1) {
+          // Check if top matches have same score (true duplicates)
+          const topScore = scoredMatches[0]?.score || 0;
+          const sameScoreMatches = scoredMatches.filter(m => m.score === topScore);
+          
+          if (sameScoreMatches.length === 1) {
+            // Only one best match, use it
+            reminder = sameScoreMatches[0].reminder;
+          } else {
+            // Multiple matches with same score - ask user
+            const options = matchingReminders.slice(0, 5).map((r, idx) => {
+              const timeStr = r.dueAt.toLocaleString('en-AU', {
+                timeZone: userTimezone,
+                weekday: 'short',
+                day: 'numeric',
+                month: 'short',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true,
+              });
+              return `${idx + 1}. "${r.title.replace('Reminder: ', '')}" - ${timeStr}`;
+            }).join('\n');
+            
+            return {
+              success: false,
+              multipleMatches: true,
+              count: matchingReminders.length,
+              matches: matchingReminders.slice(0, 5).map((r, idx) => ({
+                index: idx + 1,
+                id: r.id,
+                title: r.title,
+                dueAt: r.dueAt.toISOString(),
+              })),
+              error: `Found ${matchingReminders.length} matching reminders:\n\n${options}\n\nWhich one? Say "the first one" or specify the date/time.`,
+            };
+          }
+        }
 
         if (!reminder && pendingReminders.length > 0) {
-          // Return list of pending reminders to help user
           const reminderList = pendingReminders.slice(0, 5).map(r => {
             const timeStr = r.dueAt.toLocaleString('en-AU', {
               timeZone: userTimezone,
@@ -1646,7 +1745,7 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
           }).join(', ');
           return {
             success: false,
-            error: `Couldn't find a reminder matching "${data.searchTitle}". Your pending reminders are: ${reminderList}`,
+            error: `Couldn't find a reminder matching "${data.searchTitle}". Your pending reminders: ${reminderList}`,
           };
         }
       } else {
