@@ -59,7 +59,7 @@ describe('ReminderNotificationsService', () => {
     jest.clearAllMocks();
   });
 
-  describe('checkDueReminders', () => {
+  describe('checkReminders', () => {
     it('should find and send notifications for due reminders', async () => {
       const now = new Date();
       const dueReminder = {
@@ -82,7 +82,7 @@ describe('ReminderNotificationsService', () => {
       mockDb.notification.create.mockResolvedValue({ id: 'notif-1' });
 
       // Execute the cron job
-      await service.checkDueReminders();
+      await service.checkReminders();
 
       // Verify reminder query was called with correct time range
       expect(mockDb.reminder.findMany).toHaveBeenCalledWith(
@@ -134,7 +134,7 @@ describe('ReminderNotificationsService', () => {
       mockDb.notification.findFirst.mockResolvedValue({ id: 'existing-notif' });
 
       // Execute the cron job
-      await service.checkDueReminders();
+      await service.checkReminders();
 
       // Verify notification was NOT sent (already notified)
       expect(mockNotifications.sendNotification).not.toHaveBeenCalled();
@@ -167,7 +167,7 @@ describe('ReminderNotificationsService', () => {
       mockDb.notification.findFirst.mockResolvedValue(null); // Not notified
       mockDb.notification.create.mockResolvedValue({ id: 'notif' });
 
-      await service.checkDueReminders();
+      await service.checkReminders();
 
       // Both reminders should trigger notifications
       expect(mockNotifications.sendNotification).toHaveBeenCalledTimes(2);
@@ -178,7 +178,7 @@ describe('ReminderNotificationsService', () => {
       // This test verifies the query is correct
       mockDb.reminder.findMany.mockResolvedValue([]);
 
-      await service.checkDueReminders();
+      await service.checkReminders();
 
       expect(mockDb.reminder.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -193,7 +193,7 @@ describe('ReminderNotificationsService', () => {
       mockDb.reminder.findMany.mockRejectedValue(new Error('Database error'));
 
       // Should not throw
-      await expect(service.checkDueReminders()).resolves.not.toThrow();
+      await expect(service.checkReminders()).resolves.not.toThrow();
     });
   });
 
@@ -272,7 +272,7 @@ describe('ReminderNotificationsService', () => {
       mockDb.notification.findFirst.mockResolvedValue(null);
       mockDb.notification.create.mockResolvedValue({ id: 'notif-1' });
 
-      await service.checkDueReminders();
+      await service.checkReminders();
 
       // Verify Australian greeting is used
       expect(mockNotifications.sendNotification).toHaveBeenCalledWith(

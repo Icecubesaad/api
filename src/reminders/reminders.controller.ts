@@ -77,7 +77,7 @@ export class RemindersController {
   @ApiResponse({ status: 200, description: 'Cron job executed' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async testCronJob(@User() u: any) {
-    await this.reminderNotifications.checkDueReminders();
+    await this.reminderNotifications.checkReminders();
     return { 
       success: true, 
       message: 'Cron job executed. Check logs for details.',

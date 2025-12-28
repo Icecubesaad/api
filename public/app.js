@@ -35,6 +35,7 @@ const state = {
   chatMessages: [],
   uploadedFile: null,
   timezone: getUserTimezone(), // Auto-detect timezone
+  currentCheckin: null, // Current check-in context for replies
 };
 
 // Initialize Firebase
@@ -322,10 +323,11 @@ async function requestNotificationPermission() {
         // If it's a reminder/check-in notification, add it to chat
         const isCheckin = data?.action === 'checkin' || 
                           data?.type === 'reminder_checkin' || 
+                          data?.type === 'reminder_followup' ||
                           data?.type === 'reminder_due' ||
                           data?.reminderId;
         
-        console.log('🔔 Is check-in notification:', isCheckin, 'data:', data);
+        console.log('🔔 Is check-in notification:', isCheckin, 'type:', data?.type, 'data:', data);
         
         if (isCheckin) {
           handleCheckinNotification(data, notification);
@@ -339,7 +341,7 @@ async function requestNotificationPermission() {
   }
 }
 
-// Handle check-in notifications - add GPT message to chat
+// Handle check-in notifications - add GPT message to chat history
 function handleCheckinNotification(data, notification) {
   console.log('📋 handleCheckinNotification called:', { data, notification });
   
@@ -355,14 +357,64 @@ function handleCheckinNotification(data, notification) {
     }
   }
   
-  // Add the check-in message to chat as an assistant message
-  const checkinMessage = notification?.body || 
-    `Hey mate! How's the progress on "${data.eventTitle}"? Ready to check in?`;
+  // Determine notification type (early or follow-up)
+  const isFollowUp = data.type === 'reminder_followup' || data.notificationType === 'followup';
+  const eventTitle = data.eventTitle || 'your task';
+  const minutesUntilDue = data.minutesUntilDue ? parseInt(data.minutesUntilDue) : 0;
+  const minutesSinceDue = data.minutesSinceDue ? parseInt(data.minutesSinceDue) : 0;
   
-  addChatMessage(checkinMessage, 'assistant');
+  // The notification body is the user-friendly message
+  const displayMessage = notification?.body || 
+    (isFollowUp 
+      ? `Hey mate! How'd "${eventTitle}" go? Is it done?`
+      : `Hey mate! "${eventTitle}" is coming up. Ready to go?`);
+  
+  // Build context message for GPT based on notification type
+  let contextMessage;
+  if (isFollowUp) {
+    contextMessage = `[REMINDER FOLLOW-UP for "${eventTitle}" (was due ${minutesSinceDue} min ago)${data.reminderId ? `, reminderId: ${data.reminderId}` : ''}]\n\n${displayMessage}`;
+  } else {
+    contextMessage = `[REMINDER CHECK-IN for "${eventTitle}"${minutesUntilDue > 0 ? ` (due in ${minutesUntilDue} min)` : ' (due now)'}${data.reminderId ? `, reminderId: ${data.reminderId}` : ''}]\n\n${displayMessage}`;
+  }
+  
+  // Badge text based on type
+  const badgeText = isFollowUp ? '🔔 Follow-up' : '📋 Check-in';
+  const badgeClass = isFollowUp ? 'followup-badge' : 'checkin-badge';
+  const timestamp = formatMessageTime(new Date());
+  
+  // Add to chat UI (show the friendly message)
+  const messageDiv = document.createElement('div');
+  messageDiv.className = `message assistant ${isFollowUp ? 'followup-message' : 'checkin-message'}`;
+  messageDiv.innerHTML = `
+    <div class="message-content">
+      <div class="${badgeClass}">${badgeText}: ${escapeHtml(eventTitle)}</div>
+      ${formatMarkdown(displayMessage)}
+      <div class="message-time">${timestamp}</div>
+    </div>
+  `;
+  elements.chatMessages.appendChild(messageDiv);
+  elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+  
+  // Add to chat history WITH context (so GPT knows what reminder this is about)
+  state.chatMessages.push({ 
+    role: 'assistant', 
+    content: contextMessage,
+    timestamp: new Date().toISOString()
+  });
+  
+  // Store the current check-in context for quick actions
+  state.currentCheckin = {
+    reminderId: data.reminderId,
+    eventTitle: eventTitle,
+    projectId: data.projectId,
+    dueAt: data.dueAt,
+    isFollowUp: isFollowUp,
+  };
   
   // Show toast
-  showToast(`📋 Check-in: ${data.eventTitle}`, 'info');
+  const toastIcon = isFollowUp ? '🔔' : '📋';
+  const toastType = isFollowUp ? 'Follow-up' : 'Check-in';
+  showToast(`${toastIcon} ${toastType}: ${eventTitle}`, 'info');
 }
 
 // ============ Data Loading ============
@@ -588,15 +640,26 @@ function updateProjectSelectors() {
 function addChatMessage(content, role = 'user') {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
+  const timestamp = formatMessageTime(new Date());
   messageDiv.innerHTML = `
     <div class="message-content">
       ${role === 'assistant' ? formatMarkdown(content) : `<p>${escapeHtml(content)}</p>`}
+      <div class="message-time">${timestamp}</div>
     </div>
   `;
   elements.chatMessages.appendChild(messageDiv);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
   
-  state.chatMessages.push({ role, content });
+  state.chatMessages.push({ role, content, timestamp: new Date().toISOString() });
+}
+
+// Format time for chat messages (user's local time)
+function formatMessageTime(date) {
+  return date.toLocaleTimeString('en-AU', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
 }
 
 function addLoadingMessage(customMessage) {

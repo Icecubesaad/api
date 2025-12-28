@@ -130,6 +130,22 @@ BULK REMINDERS (VERY IMPORTANT - READ CAREFULLY):
 - For location-based reminders like "when I reach X", set a reasonable time
 - NEVER call createReminder multiple times - ALWAYS use createBulkReminders for 2+ tasks
 
+CHECK-IN RESPONSES (VERY IMPORTANT):
+- When you see "[REMINDER CHECK-IN for" in a previous message, you sent an early check-in notification (before the task was due)
+- When you see "[REMINDER FOLLOW-UP for" in a previous message, you sent a follow-up notification (after the task was due)
+- If user replies to a check-in/follow-up with progress updates like "done", "finished", "completed", "all good", "yes" - call completeReminder with the reminderId from the context
+- If user says "not yet", "still working", "need more time" - be encouraging and offer to help
+- If user asks questions about the task, help them with the specific task mentioned
+- Always reference the specific task name from the context in your response
+- Example flow for EARLY check-in:
+  * [REMINDER CHECK-IN for "Team meeting" (due in 30 min), reminderId: abc123] Hey mate! Meeting coming up!
+  * User: "ready to go"
+  * → Respond encouragingly: "Nice one! You've got this. Let me know how it goes!"
+- Example flow for FOLLOW-UP:
+  * [REMINDER FOLLOW-UP for "Team meeting" (was due 5 min ago), reminderId: abc123] Hey mate! How'd the meeting go?
+  * User: "yes all done"
+  * → Call completeReminder with reminderId "abc123", then respond "Awesome! Marked 'Team meeting' as done. 🎉"
+
 IMPORTANT: When sending ANY notification, ALWAYS start with "Hey mate!" or "G'day Mate,"
 
 Be helpful, efficient, and action-oriented. Execute tools immediately without asking for confirmation.`;
@@ -368,6 +384,15 @@ When confirming to user, show the EXACT time they requested in their local timez
             }
           }
           break;
+
+        case 'completeReminder':
+          if (result.result?.success) {
+            const title = result.result.title || 'your task';
+            messages.push(`${greeting} Marked "${title}" as done! 🎉 Nice work, mate!`);
+          } else if (result.result?.error) {
+            messages.push(`${greeting} Couldn't mark that one as complete: ${result.result.error}`);
+          }
+          break;
       }
     }
 
@@ -528,6 +553,21 @@ When confirming to user, show the EXACT time they requested in their local timez
           },
         },
       },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'completeReminder',
+          description: 'Mark a reminder as completed. Use this when user says they finished a task from a check-in, or explicitly asks to mark a reminder as done. Extract the reminderId from the [REMINDER CHECK-IN] context in the conversation.',
+          parameters: {
+            type: 'object',
+            properties: {
+              reminderId: { type: 'string', description: 'The reminder ID to mark as complete (from check-in context or user specification)' },
+              title: { type: 'string', description: 'The reminder title (for confirmation message)' },
+            },
+            required: ['reminderId'],
+          },
+        },
+      },
     ];
 
     if (!allowedTools) return allTools;
@@ -656,6 +696,15 @@ When confirming to user, show the EXACT time they requested in their local timez
                 data: { type: 'bulk_reminders', count: String(bulkResult.created) },
               });
             }
+            break;
+
+          case 'completeReminder':
+            const completedReminder = await this.completeReminder({
+              ...parsedArgs,
+              userId,
+            });
+            toolResults.push({ tool: name, result: completedReminder });
+            createdEntities.completedReminder = completedReminder;
             break;
 
           default:
@@ -1510,6 +1559,48 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
       reminders: createdReminders,
       errors: errors.length > 0 ? errors : undefined,
     };
+  }
+
+  // Mark a reminder as completed
+  private async completeReminder(data: { userId: string; reminderId: string; title?: string }) {
+    try {
+      // Find the reminder and verify ownership
+      const reminder = await this.db.reminder.findFirst({
+        where: {
+          id: data.reminderId,
+          userId: data.userId,
+        },
+      });
+
+      if (!reminder) {
+        this.logger.warn(`Reminder ${data.reminderId} not found for user ${data.userId}`);
+        return {
+          success: false,
+          error: 'Reminder not found or access denied',
+        };
+      }
+
+      // Update the reminder status to COMPLETED
+      const updatedReminder = await this.db.reminder.update({
+        where: { id: data.reminderId },
+        data: { status: 'COMPLETED' },
+      });
+
+      this.logger.log(`Marked reminder "${updatedReminder.title}" as completed for user ${data.userId}`);
+
+      return {
+        success: true,
+        reminderId: updatedReminder.id,
+        title: updatedReminder.title,
+        status: updatedReminder.status,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to complete reminder ${data.reminderId}:`, error);
+      return {
+        success: false,
+        error: error.message || 'Failed to complete reminder',
+      };
+    }
   }
 }
 
