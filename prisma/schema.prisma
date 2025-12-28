@@ -227,6 +227,18 @@ model AuditEvent {
   @@map("audit_events")
 }
 
+model ChatMessage {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  role      ChatRole
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@map("chat_messages")
+}
+
 // Enums
 enum UserRole {
   USER
@@ -280,6 +292,11 @@ enum AuthProvider {
   FIREBASE
   LOCAL
   GOOGLE
+}
+
+enum ChatRole {
+  USER
+  ASSISTANT
 }
 
 

@@ -130,6 +130,15 @@ BULK REMINDERS (VERY IMPORTANT - READ CAREFULLY):
 - For location-based reminders like "when I reach X", set a reasonable time
 - NEVER call createReminder multiple times - ALWAYS use createBulkReminders for 2+ tasks
 
+COMPLETING REMINDERS (VERY IMPORTANT):
+- When user says "mark X complete", "done with X", "finished X", "X is done" - IMMEDIATELY call completeReminder with searchTitle set to the task name
+- Examples:
+  * "mark gym complete" → completeReminder with searchTitle: "gym"
+  * "done with the meeting" → completeReminder with searchTitle: "meeting"
+  * "finished my call" → completeReminder with searchTitle: "call"
+- You do NOT need a reminderId - just use the task name/title and the tool will find it
+- If from a check-in context with reminderId, you can use that instead
+
 CHECK-IN RESPONSES (VERY IMPORTANT):
 - When you see "[REMINDER CHECK-IN for" in a previous message, you sent an early check-in notification (before the task was due)
 - When you see "[REMINDER FOLLOW-UP for" in a previous message, you sent a follow-up notification (after the task was due)
@@ -557,14 +566,14 @@ When confirming to user, show the EXACT time they requested in their local timez
         type: 'function' as const,
         function: {
           name: 'completeReminder',
-          description: 'Mark a reminder as completed. Use this when user says they finished a task from a check-in, or explicitly asks to mark a reminder as done. Extract the reminderId from the [REMINDER CHECK-IN] context in the conversation.',
+          description: 'Mark a reminder as completed. Use this when user says they finished a task, or asks to mark a reminder as done. You can use EITHER reminderId (from check-in context) OR searchTitle (to find by name). If user says "mark gym complete" or "done with meeting", use searchTitle with the task name.',
           parameters: {
             type: 'object',
             properties: {
-              reminderId: { type: 'string', description: 'The reminder ID to mark as complete (from check-in context or user specification)' },
-              title: { type: 'string', description: 'The reminder title (for confirmation message)' },
+              reminderId: { type: 'string', description: 'The reminder ID to mark as complete (use if available from check-in context)' },
+              searchTitle: { type: 'string', description: 'Search for reminder by title/name. Use this when user says "mark X complete" or "done with X". Example: "gym", "meeting", "call mom"' },
             },
-            required: ['reminderId'],
+            required: [],
           },
         },
       },
@@ -702,6 +711,7 @@ When confirming to user, show the EXACT time they requested in their local timez
             const completedReminder = await this.completeReminder({
               ...parsedArgs,
               userId,
+              timezone: timezone,
             });
             toolResults.push({ tool: name, result: completedReminder });
             createdEntities.completedReminder = completedReminder;
@@ -1561,28 +1571,113 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
     };
   }
 
-  // Mark a reminder as completed
-  private async completeReminder(data: { userId: string; reminderId: string; title?: string }) {
+  // Mark a reminder as completed - supports both ID and title search
+  private async completeReminder(data: { userId: string; reminderId?: string; searchTitle?: string; timezone?: string }) {
+    const userTimezone = data.timezone || 'Australia/Sydney';
+    
     try {
-      // Find the reminder and verify ownership
-      const reminder = await this.db.reminder.findFirst({
-        where: {
-          id: data.reminderId,
-          userId: data.userId,
-        },
-      });
+      let reminder;
 
-      if (!reminder) {
-        this.logger.warn(`Reminder ${data.reminderId} not found for user ${data.userId}`);
+      // If reminderId is provided, use it directly
+      if (data.reminderId) {
+        reminder = await this.db.reminder.findFirst({
+          where: {
+            id: data.reminderId,
+            userId: data.userId,
+          },
+        });
+      } 
+      // Otherwise, search by title
+      else if (data.searchTitle) {
+        // Search for PENDING reminders matching the title (case-insensitive)
+        const searchTerm = data.searchTitle.toLowerCase();
+        
+        const pendingReminders = await this.db.reminder.findMany({
+          where: {
+            userId: data.userId,
+            status: 'PENDING',
+          },
+          orderBy: { dueAt: 'asc' },
+        });
+
+        // Find ALL matching reminders (exact or partial)
+        const matchingReminders = pendingReminders.filter(r => 
+          r.title.toLowerCase() === searchTerm ||
+          r.title.toLowerCase() === `reminder: ${searchTerm}` ||
+          r.title.toLowerCase().includes(searchTerm) ||
+          searchTerm.includes(r.title.toLowerCase().replace('reminder: ', ''))
+        );
+
+        // If multiple matches found, ask user to specify by time
+        if (matchingReminders.length > 1) {
+          const options = matchingReminders.map(r => {
+            const timeStr = r.dueAt.toLocaleString('en-AU', {
+              timeZone: userTimezone,
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+            });
+            return `• "${r.title.replace('Reminder: ', '')}" at ${timeStr}`;
+          }).join('\n');
+          
+          return {
+            success: false,
+            multipleMatches: true,
+            count: matchingReminders.length,
+            error: `Found ${matchingReminders.length} reminders matching "${data.searchTitle}". Which one do you mean?\n\n${options}\n\nPlease specify the time, like "mark the 2pm one complete" or "the one at 6pm is done".`,
+          };
+        }
+
+        reminder = matchingReminders[0];
+
+        if (!reminder && pendingReminders.length > 0) {
+          // Return list of pending reminders to help user
+          const reminderList = pendingReminders.slice(0, 5).map(r => {
+            const timeStr = r.dueAt.toLocaleString('en-AU', {
+              timeZone: userTimezone,
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+            });
+            return `"${r.title.replace('Reminder: ', '')}" (${timeStr})`;
+          }).join(', ');
+          return {
+            success: false,
+            error: `Couldn't find a reminder matching "${data.searchTitle}". Your pending reminders are: ${reminderList}`,
+          };
+        }
+      } else {
         return {
           success: false,
-          error: 'Reminder not found or access denied',
+          error: 'Please specify which reminder to complete (by name or from a check-in)',
+        };
+      }
+
+      if (!reminder) {
+        this.logger.warn(`Reminder not found for user ${data.userId} (search: ${data.searchTitle || data.reminderId})`);
+        return {
+          success: false,
+          error: `Couldn't find that reminder. It may already be completed or doesn't exist.`,
+        };
+      }
+
+      // Check if already completed
+      if (reminder.status === 'COMPLETED') {
+        return {
+          success: true,
+          reminderId: reminder.id,
+          title: reminder.title,
+          status: 'COMPLETED',
+          message: `"${reminder.title.replace('Reminder: ', '')}" is already marked as complete!`,
         };
       }
 
       // Update the reminder status to COMPLETED
       const updatedReminder = await this.db.reminder.update({
-        where: { id: data.reminderId },
+        where: { id: reminder.id },
         data: { status: 'COMPLETED' },
       });
 
@@ -1595,7 +1690,7 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
         status: updatedReminder.status,
       };
     } catch (error) {
-      this.logger.error(`Failed to complete reminder ${data.reminderId}:`, error);
+      this.logger.error(`Failed to complete reminder:`, error);
       return {
         success: false,
         error: error.message || 'Failed to complete reminder',

@@ -428,12 +428,17 @@ async function loadInitialData() {
     if (state.projects.length > 0) {
       state.currentProject = state.projects[0];
       elements.chatProjectSelect.value = state.currentProject.id;
-      await Promise.all([loadNotes(), loadReminders()]);
+      await Promise.all([
+        loadNotes(), 
+        loadReminders(),
+        loadChatHistory(state.currentProject.id), // Load chat history for first project
+      ]);
     } else {
       hideSectionLoading('notes-list');
       hideSectionLoading('reminders-list');
       renderNotes();
       renderReminders();
+      showWelcomeMessage(); // Show welcome if no projects
     }
   } catch (error) {
     console.error('Failed to load data:', error);
@@ -881,8 +886,100 @@ function selectProject(projectId) {
   
   loadNotes();
   loadReminders();
+  loadChatHistory(projectId); // Load chat history for this project
   switchView('chat');
   showToast(`Switched to ${state.currentProject.name}`);
+}
+
+// Load chat history for a project
+async function loadChatHistory(projectId) {
+  if (!projectId) return;
+  
+  // Clear current chat messages
+  state.chatMessages = [];
+  elements.chatMessages.innerHTML = '';
+  
+  try {
+    const response = await api(`/ai/chat/history?projectId=${projectId}&limit=100`);
+    
+    if (response.messages && response.messages.length > 0) {
+      // Render each message from history
+      for (const msg of response.messages) {
+        renderHistoryMessage(msg);
+        state.chatMessages.push({
+          role: msg.role,
+          content: msg.content,
+          timestamp: msg.timestamp,
+        });
+      }
+      elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+    } else {
+      // Show welcome message if no history
+      showWelcomeMessage();
+    }
+  } catch (error) {
+    console.error('Failed to load chat history:', error);
+    showWelcomeMessage();
+  }
+}
+
+// Render a message from history
+function renderHistoryMessage(msg) {
+  const messageDiv = document.createElement('div');
+  messageDiv.className = `message ${msg.role}`;
+  const timestamp = msg.timestamp ? formatMessageTime(new Date(msg.timestamp)) : '';
+  messageDiv.innerHTML = `
+    <div class="message-content">
+      ${msg.role === 'assistant' ? formatMarkdown(msg.content) : `<p>${escapeHtml(msg.content)}</p>`}
+      ${timestamp ? `<div class="message-time">${timestamp}</div>` : ''}
+    </div>
+  `;
+  elements.chatMessages.appendChild(messageDiv);
+}
+
+// Show welcome message when no chat history
+function showWelcomeMessage() {
+  const welcomeDiv = document.createElement('div');
+  welcomeDiv.className = 'message assistant welcome-message';
+  welcomeDiv.innerHTML = `
+    <div class="message-content">
+      <p>G'day mate! 👋 I'm JobMate, your daily assistant.</p>
+      <p>I can help you with:</p>
+      <ul>
+        <li>📝 Creating notes and summaries</li>
+        <li>⏰ Setting reminders</li>
+        <li>📅 Managing your schedule</li>
+        <li>📄 Importing schedules from PDFs</li>
+      </ul>
+      <p>Just ask me anything!</p>
+    </div>
+  `;
+  elements.chatMessages.appendChild(welcomeDiv);
+}
+
+// Clear chat history for current project
+async function clearChatHistory() {
+  if (!state.currentProject) {
+    showToast('Please select a project first', 'error');
+    return;
+  }
+  
+  if (!confirm('Are you sure you want to clear all chat history for this project?')) {
+    return;
+  }
+  
+  try {
+    await api(`/ai/chat/history/${state.currentProject.id}`, {
+      method: 'DELETE',
+    });
+    
+    state.chatMessages = [];
+    elements.chatMessages.innerHTML = '';
+    showWelcomeMessage();
+    showToast('Chat history cleared', 'success');
+  } catch (error) {
+    showToast('Failed to clear chat history', 'error');
+  }
 }
 
 async function createProject() {
@@ -1437,6 +1534,7 @@ function initEventListeners() {
       state.currentProject = state.projects.find(p => p.id === projectId);
       loadNotes();
       loadReminders();
+      loadChatHistory(projectId); // Load chat history when switching projects
     }
   });
   
