@@ -55,6 +55,7 @@ export class ReminderNotificationsService {
       },
       include: {
         project: true,
+        user: true, // Include user to get timezone preference
       },
     });
 
@@ -84,6 +85,7 @@ export class ReminderNotificationsService {
       },
       include: {
         project: true,
+        user: true, // Include user to get timezone preference
       },
     });
 
@@ -127,18 +129,46 @@ export class ReminderNotificationsService {
   }
 
   /**
+   * Get user's timezone from preferences, default to Australia/Sydney
+   */
+  private getUserTimezone(user: any): string {
+    const notifPrefs = (user?.notifPrefs as any) || {};
+    return notifPrefs.timezone || 'Australia/Sydney';
+  }
+
+  /**
+   * Format time in user's timezone
+   */
+  private formatTimeInUserTimezone(date: Date, timezone: string): string {
+    return date.toLocaleString('en-AU', {
+      timeZone: timezone,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  }
+
+  /**
    * Send early notification (before task is due)
    */
   private async sendEarlyNotification(reminder: any) {
     try {
       const eventTitle = reminder.title.replace('Reminder: ', '');
       const projectName = reminder.project?.name;
+      const userTimezone = this.getUserTimezone(reminder.user);
       
       const now = new Date();
       const dueAt = new Date(reminder.dueAt);
       const minutesUntilDue = Math.max(0, Math.round((dueAt.getTime() - now.getTime()) / (60 * 1000)));
+      const dueTimeFormatted = this.formatTimeInUserTimezone(dueAt, userTimezone);
 
-      const { title, body } = await this.generateCheckinMessage(eventTitle, projectName, 'early', minutesUntilDue);
+      const { title, body } = await this.generateCheckinMessage(
+        eventTitle, 
+        projectName, 
+        'early', 
+        minutesUntilDue,
+        dueTimeFormatted
+      );
       
       await this.notificationsService.sendNotification(reminder.userId, 'PUSH', {
         title,
@@ -149,6 +179,7 @@ export class ReminderNotificationsService {
           reminderId: reminder.id,
           eventTitle,
           dueAt: reminder.dueAt.toISOString(),
+          dueAtFormatted: dueTimeFormatted,
           projectId: reminder.projectId,
           action: 'checkin',
           minutesUntilDue: String(minutesUntilDue),
@@ -168,12 +199,16 @@ export class ReminderNotificationsService {
             reminderId: reminder.id,
             eventTitle,
             dueAt: reminder.dueAt.toISOString(),
+            dueAtFormatted: dueTimeFormatted,
             minutesUntilDue,
           },
         },
       });
 
-      this.logger.log(`Sent EARLY notification for: "${reminder.title}" (due in ${minutesUntilDue} min) to user ${reminder.userId}`);
+      // Save check-in message to chat history
+      await this.saveToChatHistory(reminder, 'early', body, minutesUntilDue);
+
+      this.logger.log(`Sent EARLY notification for: "${reminder.title}" (due at ${dueTimeFormatted}) to user ${reminder.userId}`);
     } catch (error) {
       this.logger.error(`Failed to send early notification for ${reminder.id}:`, error);
     }
@@ -186,12 +221,20 @@ export class ReminderNotificationsService {
     try {
       const eventTitle = reminder.title.replace('Reminder: ', '');
       const projectName = reminder.project?.name;
+      const userTimezone = this.getUserTimezone(reminder.user);
       
       const now = new Date();
       const dueAt = new Date(reminder.dueAt);
       const minutesSinceDue = Math.round((now.getTime() - dueAt.getTime()) / (60 * 1000));
+      const dueTimeFormatted = this.formatTimeInUserTimezone(dueAt, userTimezone);
 
-      const { title, body } = await this.generateCheckinMessage(eventTitle, projectName, 'followup', minutesSinceDue);
+      const { title, body } = await this.generateCheckinMessage(
+        eventTitle, 
+        projectName, 
+        'followup', 
+        minutesSinceDue,
+        dueTimeFormatted
+      );
       
       await this.notificationsService.sendNotification(reminder.userId, 'PUSH', {
         title,
@@ -202,6 +245,7 @@ export class ReminderNotificationsService {
           reminderId: reminder.id,
           eventTitle,
           dueAt: reminder.dueAt.toISOString(),
+          dueAtFormatted: dueTimeFormatted,
           projectId: reminder.projectId,
           action: 'checkin',
           minutesSinceDue: String(minutesSinceDue),
@@ -221,14 +265,54 @@ export class ReminderNotificationsService {
             reminderId: reminder.id,
             eventTitle,
             dueAt: reminder.dueAt.toISOString(),
+            dueAtFormatted: dueTimeFormatted,
             minutesSinceDue,
           },
         },
       });
 
-      this.logger.log(`Sent FOLLOW-UP notification for: "${reminder.title}" (was due ${minutesSinceDue} min ago) to user ${reminder.userId}`);
+      // Save follow-up message to chat history
+      await this.saveToChatHistory(reminder, 'followup', body, minutesSinceDue);
+
+      this.logger.log(`Sent FOLLOW-UP notification for: "${reminder.title}" (was due at ${dueTimeFormatted}) to user ${reminder.userId}`);
     } catch (error) {
       this.logger.error(`Failed to send follow-up notification for ${reminder.id}:`, error);
+    }
+  }
+
+  /**
+   * Save check-in/follow-up message to chat history for the project
+   */
+  private async saveToChatHistory(
+    reminder: any, 
+    type: 'early' | 'followup', 
+    messageBody: string,
+    minutes: number
+  ) {
+    try {
+      const eventTitle = reminder.title.replace('Reminder: ', '');
+      
+      // Build context message for GPT (same format as frontend)
+      let contextMessage: string;
+      if (type === 'followup') {
+        contextMessage = `[REMINDER FOLLOW-UP for "${eventTitle}" (was due ${minutes} min ago), reminderId: ${reminder.id}]\n\n${messageBody}`;
+      } else {
+        contextMessage = `[REMINDER CHECK-IN for "${eventTitle}" (due in ${minutes} min), reminderId: ${reminder.id}]\n\n${messageBody}`;
+      }
+
+      // Save to chat history
+      await this.db.chatMessage.create({
+        data: {
+          projectId: reminder.projectId,
+          userId: reminder.userId,
+          role: 'ASSISTANT',
+          content: contextMessage,
+        },
+      });
+
+      this.logger.log(`Saved ${type} check-in to chat history for project ${reminder.projectId}`);
+    } catch (error) {
+      this.logger.error(`Failed to save check-in to chat history:`, error);
     }
   }
 
@@ -239,12 +323,13 @@ export class ReminderNotificationsService {
     taskTitle: string, 
     projectName: string | undefined, 
     type: 'early' | 'followup',
-    minutes: number
+    minutes: number,
+    dueTimeFormatted?: string
   ): Promise<{ title: string; body: string }> {
     try {
       const timeContext = type === 'early'
-        ? `This is an early heads-up - the task "${taskTitle}" is due in about ${minutes} minutes.`
-        : `The task "${taskTitle}" was due ${minutes} minutes ago. This is a follow-up to check if it's done.`;
+        ? `This is an early heads-up - the task "${taskTitle}" is due ${dueTimeFormatted ? `at ${dueTimeFormatted}` : `in about ${minutes} minutes`}.`
+        : `The task "${taskTitle}" was due ${dueTimeFormatted ? `at ${dueTimeFormatted}` : `${minutes} minutes ago`}. This is a follow-up to check if it's done.`;
       
       const prompt = `You are JobMate, a friendly Australian assistant. Generate a short, casual ${type === 'early' ? 'reminder' : 'follow-up'} notification.
 
@@ -257,13 +342,15 @@ Rules:
 - MUST include the task title "${taskTitle}" in the notification
 - Keep title under 100 characters
 ${type === 'early' 
-  ? `- Mention it's coming up soon (in ~${minutes} min)
-- Be encouraging about the upcoming task`
+  ? `- Mention it's coming up soon${dueTimeFormatted ? ` (at ${dueTimeFormatted})` : ` (in ~${minutes} min)`}
+- Be encouraging about the upcoming task
+- Use the formatted time "${dueTimeFormatted}" if available, NOT UTC`
   : `- Ask if the task is done or how it went
 - Be friendly, not pushy - they might still be working on it
 - Offer to mark it as complete if they're done`}
 - Use Australian slang occasionally
 - The body should mention the task name
+- NEVER show UTC times - use relative time or the formatted local time
 
 Return JSON format:
 {"title": "...", "body": "..."}`;
@@ -281,8 +368,8 @@ Return JSON format:
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         return {
-          title: parsed.title || this.getDefaultTitle(taskTitle, type, minutes),
-          body: parsed.body || this.getDefaultBody(taskTitle, type, minutes),
+          title: parsed.title || this.getDefaultTitle(taskTitle, type, minutes, dueTimeFormatted),
+          body: parsed.body || this.getDefaultBody(taskTitle, type, minutes, dueTimeFormatted),
         };
       }
     } catch (error) {
@@ -290,15 +377,15 @@ Return JSON format:
     }
 
     return {
-      title: this.getDefaultTitle(taskTitle, type, minutes),
-      body: this.getDefaultBody(taskTitle, type, minutes),
+      title: this.getDefaultTitle(taskTitle, type, minutes, dueTimeFormatted),
+      body: this.getDefaultBody(taskTitle, type, minutes, dueTimeFormatted),
     };
   }
 
-  private getDefaultTitle(taskTitle: string, type: 'early' | 'followup', minutes: number): string {
+  private getDefaultTitle(taskTitle: string, type: 'early' | 'followup', minutes: number, dueTimeFormatted?: string): string {
     if (type === 'early') {
       const titles = [
-        `Hey mate! "${taskTitle}" in ${minutes} min`,
+        `Hey mate! "${taskTitle}" at ${dueTimeFormatted || `in ${minutes} min`}`,
         `G'day! "${taskTitle}" coming up`,
         `Hey mate! Heads up - "${taskTitle}"`,
       ];
@@ -313,10 +400,10 @@ Return JSON format:
     }
   }
 
-  private getDefaultBody(taskTitle: string, type: 'early' | 'followup', minutes: number): string {
+  private getDefaultBody(taskTitle: string, type: 'early' | 'followup', minutes: number, dueTimeFormatted?: string): string {
     if (type === 'early') {
       const bodies = [
-        `"${taskTitle}" is coming up in ${minutes} minutes. Ready to go?`,
+        `"${taskTitle}" is coming up ${dueTimeFormatted ? `at ${dueTimeFormatted}` : `in ${minutes} minutes`}. Ready to go?`,
         `Just a heads up - "${taskTitle}" is due soon!`,
         `"${taskTitle}" is almost here. You've got this!`,
       ];

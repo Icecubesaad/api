@@ -63,18 +63,39 @@ export class WebhooksController {
       return { success: false, message: 'User not found' };
     }
 
-    // Update with FCM token
+    const existingPrefs = (dbUser.notifPrefs as any) || {};
+    const existingTokens = existingPrefs.fcmTokens || [];
+    
+    // Detect platform from token format or request
+    // Web tokens typically start with different prefixes than mobile
+    const platform = body.platform || (body.token.length > 150 ? 'web' : 'mobile');
+    
+    // Store multiple tokens (one per platform)
+    const newToken = {
+      token: body.token,
+      platform,
+      registeredAt: new Date().toISOString(),
+    };
+    
+    // Remove old tokens for same platform, keep others
+    const filteredTokens = existingTokens.filter((t: any) => t.platform !== platform);
+    const updatedTokens = [...filteredTokens, newToken];
+
+    // Update with FCM tokens array AND keep legacy fcmToken for backward compatibility
     await this.db.user.update({
       where: { firebaseUid: user.uid },
       data: {
         notifPrefs: {
-          ...((dbUser.notifPrefs as object) || {}),
-          fcmToken: body.token,
+          ...existingPrefs,
+          fcmToken: body.token, // Keep for backward compatibility
+          fcmTokens: updatedTokens, // New multi-platform support
         },
       },
     });
 
-    return { success: true };
+    console.log(`📱 FCM token registered for user ${dbUser.id} (${platform}): ${body.token.substring(0, 20)}...`);
+
+    return { success: true, platform };
   }
 
   private async handleSubscriptionUpdate(subscription: any) {

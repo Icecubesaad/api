@@ -172,65 +172,117 @@ export class NotificationsService {
       return;
     }
 
-    // FCM token is stored in user.notifPrefs.fcmToken
     const notifPrefs = (user.notifPrefs as any) || {};
-    const fcmToken = notifPrefs.fcmToken as string | undefined;
+    const fcmTokens = notifPrefs.fcmTokens || [];
+    const legacyToken = notifPrefs.fcmToken;
+    
+    // Collect all unique tokens
+    const allTokens: { token: string; platform: string }[] = [];
+    
+    // Add tokens from new array format
+    for (const t of fcmTokens) {
+      if (t.token && !allTokens.find(x => x.token === t.token)) {
+        allTokens.push({ token: t.token, platform: t.platform || 'unknown' });
+      }
+    }
+    
+    // Add legacy token if not already included
+    if (legacyToken && !allTokens.find(x => x.token === legacyToken)) {
+      allTokens.push({ token: legacyToken, platform: 'legacy' });
+    }
     
     this.logger.log(`📱 Push notification for user ${userId}:`);
-    this.logger.log(`   - Has notifPrefs: ${!!notifPrefs}`);
-    this.logger.log(`   - Has FCM token: ${!!fcmToken}`);
-    this.logger.log(`   - Token preview: ${fcmToken ? fcmToken.substring(0, 20) + '...' : 'NONE'}`);
+    this.logger.log(`   - Total tokens: ${allTokens.length}`);
+    allTokens.forEach((t, i) => {
+      this.logger.log(`   - Token ${i + 1} (${t.platform}): ${t.token.substring(0, 20)}...`);
+    });
     
-    if (!fcmToken) {
-      this.logger.warn(`❌ No FCM token for user ${userId} - notification NOT sent`);
-      this.logger.warn(`   User needs to allow notifications in browser and refresh the page`);
+    if (allTokens.length === 0) {
+      this.logger.warn(`❌ No FCM tokens for user ${userId} - notification NOT sent`);
+      this.logger.warn(`   User needs to allow notifications in browser/app`);
       return;
     }
 
-    try {
-      this.logger.log(`🚀 Sending FCM message...`);
-      
-      // FCM data must only contain string values - convert all values to strings
-      const stringifiedData: Record<string, string> = {};
-      if (notification.data) {
-        for (const [key, value] of Object.entries(notification.data)) {
-          if (value !== null && value !== undefined) {
-            stringifiedData[key] = typeof value === 'string' ? value : JSON.stringify(value);
-          }
+    // FCM data must only contain string values
+    const stringifiedData: Record<string, string> = {};
+    if (notification.data) {
+      for (const [key, value] of Object.entries(notification.data)) {
+        if (value !== null && value !== undefined) {
+          stringifiedData[key] = typeof value === 'string' ? value : JSON.stringify(value);
         }
       }
-      
-      const result = await admin.messaging().send({
-        token: fcmToken,
-        notification: {
-          title: notification.title,
-          body: notification.body,
-        },
-        data: stringifiedData,
-      });
-      this.logger.log(`✅ FCM message sent successfully! Message ID: ${result}`);
-    } catch (fcmError) {
-      this.logger.error(`❌ FCM send failed:`, fcmError.message);
-      this.logger.error(`   Error code: ${fcmError.code}`);
-      
-      // If token is invalid/expired, clear it so user can re-register
-      if (fcmError.code === 'messaging/registration-token-not-registered' ||
-          fcmError.code === 'messaging/invalid-registration-token') {
-        this.logger.warn(`🗑️ Clearing invalid FCM token for user ${userId}`);
-        try {
-          const updatedPrefs = { ...notifPrefs };
-          delete updatedPrefs.fcmToken;
-          await this.db.user.update({
-            where: { id: userId },
-            data: { notifPrefs: updatedPrefs },
-          });
-          this.logger.log(`   Token cleared. User will get new token on next page load.`);
-        } catch (clearError) {
-          this.logger.error(`   Failed to clear token:`, clearError.message);
+    }
+
+    // Send to all tokens
+    const invalidTokens: string[] = [];
+    let successCount = 0;
+    
+    for (const { token, platform } of allTokens) {
+      try {
+        this.logger.log(`🚀 Sending FCM to ${platform}...`);
+        
+        const result = await admin.messaging().send({
+          token,
+          notification: {
+            title: notification.title,
+            body: notification.body,
+          },
+          data: stringifiedData,
+          // Android-specific config
+          android: {
+            priority: 'high',
+            notification: {
+              sound: 'default',
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+            },
+          },
+          // iOS-specific config  
+          apns: {
+            payload: {
+              aps: {
+                sound: 'default',
+                badge: 1,
+              },
+            },
+          },
+        });
+        
+        this.logger.log(`✅ FCM sent to ${platform}! Message ID: ${result}`);
+        successCount++;
+      } catch (fcmError) {
+        this.logger.error(`❌ FCM send to ${platform} failed:`, fcmError.message);
+        
+        if (fcmError.code === 'messaging/registration-token-not-registered' ||
+            fcmError.code === 'messaging/invalid-registration-token') {
+          invalidTokens.push(token);
         }
       }
+    }
+
+    // Clean up invalid tokens
+    if (invalidTokens.length > 0) {
+      this.logger.warn(`🗑️ Removing ${invalidTokens.length} invalid tokens for user ${userId}`);
+      const validTokens = fcmTokens.filter((t: any) => !invalidTokens.includes(t.token));
+      const newLegacyToken = invalidTokens.includes(legacyToken) ? null : legacyToken;
       
-      throw fcmError;
+      try {
+        await this.db.user.update({
+          where: { id: userId },
+          data: {
+            notifPrefs: {
+              ...notifPrefs,
+              fcmToken: newLegacyToken,
+              fcmTokens: validTokens,
+            },
+          },
+        });
+      } catch (clearError) {
+        this.logger.error(`Failed to clear invalid tokens:`, clearError.message);
+      }
+    }
+
+    if (successCount === 0) {
+      throw new Error('Failed to send to any device');
     }
   }
 
