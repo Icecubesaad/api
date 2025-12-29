@@ -622,10 +622,20 @@ When confirming to user, show the EXACT time they requested in their local timez
             toolResults.push({ tool: name, result: reminder });
             createdEntities.reminder = reminder;
             
-            // Send notification with Australian greeting
+            // Send notification with Australian greeting - use user's timezone
+            const reminderTz = timezone || 'Australia/Sydney';
+            const reminderTimeFormatted = new Date(reminder.dueAt).toLocaleString('en-AU', {
+              timeZone: reminderTz,
+              weekday: 'short',
+              day: 'numeric',
+              month: 'short',
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+            });
             await this.notificationsService.sendNotification(userId, 'PUSH', {
               title: 'Hey mate! New reminder created',
-              body: `Your reminder "${reminder.title}" is set for ${new Date(reminder.dueAt).toLocaleString()}`,
+              body: `Your reminder "${reminder.title}" is set for ${reminderTimeFormatted}`,
               data: { type: 'reminder', id: reminder.id }
             });
             break;
@@ -638,12 +648,22 @@ When confirming to user, show the EXACT time they requested in their local timez
             toolResults.push({ tool: name, result: event });
             createdEntities.event = event;
             
-            // Send notification with Australian greeting
+            // Send notification with Australian greeting - use user's timezone
+            const eventTz = timezone || 'Australia/Sydney';
             const eventTitle = event?.summary || 'New Event';
             const eventStart = event?.start?.dateTime || event?.start || new Date();
+            const eventTimeFormatted = new Date(eventStart).toLocaleString('en-AU', {
+              timeZone: eventTz,
+              weekday: 'short',
+              day: 'numeric',
+              month: 'short',
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+            });
             await this.notificationsService.sendNotification(userId, 'PUSH', {
               title: 'G\'day Mate, Calendar event created',
-              body: `Event "${eventTitle}" scheduled for ${new Date(eventStart).toLocaleString()}`,
+              body: `Event "${eventTitle}" scheduled for ${eventTimeFormatted}`,
               data: { type: 'calendar_event', id: (event as any)?.eventId || (event as any)?.id }
             });
             break;

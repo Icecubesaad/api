@@ -926,14 +926,53 @@ async function loadChatHistory(projectId) {
 // Render a message from history
 function renderHistoryMessage(msg) {
   const messageDiv = document.createElement('div');
-  messageDiv.className = `message ${msg.role}`;
   const timestamp = msg.timestamp ? formatMessageTime(new Date(msg.timestamp)) : '';
-  messageDiv.innerHTML = `
-    <div class="message-content">
-      ${msg.role === 'assistant' ? formatMarkdown(msg.content) : `<p>${escapeHtml(msg.content)}</p>`}
-      ${timestamp ? `<div class="message-time">${timestamp}</div>` : ''}
-    </div>
-  `;
+  
+  // Check if this is a check-in or follow-up message from history
+  const isCheckin = msg.content.startsWith('[REMINDER CHECK-IN');
+  const isFollowUp = msg.content.startsWith('[REMINDER FOLLOW-UP');
+  
+  if (isCheckin || isFollowUp) {
+    // Parse the context and extract the display message
+    const contextMatch = msg.content.match(/^\[REMINDER (CHECK-IN|FOLLOW-UP) for "([^"]+)"[^\]]*\]\n\n([\s\S]*)$/);
+    
+    if (contextMatch) {
+      const type = contextMatch[1];
+      const eventTitle = contextMatch[2];
+      const displayMessage = contextMatch[3];
+      
+      const badgeText = type === 'FOLLOW-UP' ? '🔔 Follow-up' : '📋 Check-in';
+      const badgeClass = type === 'FOLLOW-UP' ? 'followup-badge' : 'checkin-badge';
+      
+      messageDiv.className = `message assistant ${type === 'FOLLOW-UP' ? 'followup-message' : 'checkin-message'}`;
+      messageDiv.innerHTML = `
+        <div class="message-content">
+          <div class="${badgeClass}">${badgeText}: ${escapeHtml(eventTitle)}</div>
+          ${formatMarkdown(displayMessage)}
+          ${timestamp ? `<div class="message-time">${timestamp}</div>` : ''}
+        </div>
+      `;
+    } else {
+      // Fallback if parsing fails
+      messageDiv.className = `message ${msg.role}`;
+      messageDiv.innerHTML = `
+        <div class="message-content">
+          ${formatMarkdown(msg.content)}
+          ${timestamp ? `<div class="message-time">${timestamp}</div>` : ''}
+        </div>
+      `;
+    }
+  } else {
+    // Regular message
+    messageDiv.className = `message ${msg.role}`;
+    messageDiv.innerHTML = `
+      <div class="message-content">
+        ${msg.role === 'assistant' ? formatMarkdown(msg.content) : `<p>${escapeHtml(msg.content)}</p>`}
+        ${timestamp ? `<div class="message-time">${timestamp}</div>` : ''}
+      </div>
+    `;
+  }
+  
   elements.chatMessages.appendChild(messageDiv);
 }
 
