@@ -1,50 +1,45 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
+import * as fs from 'fs';
+import * as path from 'path';
 import { templates } from './templates';
 import { DatabaseService } from '../database/database.service';
 
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
+  private firebaseApp: admin.app.App | null = null;
 
   constructor(
     private readonly config: ConfigService,
     private readonly db: DatabaseService,
   ) {
-    if (!admin.apps.length) {
-      const projectId = this.config.get<string>('firebase.projectId');
-      const clientEmail = this.config.get<string>('firebase.clientEmail');
-      const privateKey = this.config.get<string>('firebase.privateKey');
+    this.initializeFirebase();
+  }
 
-      // Only initialize Firebase if valid credentials are provided
-      const hasValidCredentials = 
-        projectId && 
-        !projectId.includes('your-') && 
-        clientEmail && 
-        !clientEmail.includes('xxxxx') &&
-        privateKey && 
-        privateKey.includes('BEGIN PRIVATE KEY') && 
-        !privateKey.includes('YOUR_PRIVATE_KEY_HERE');
-
-      if (hasValidCredentials) {
-        try {
-          admin.initializeApp({
-            credential: admin.credential.cert({
-              projectId,
-              clientEmail,
-              privateKey: privateKey.replace(/\\n/g, '\n'),
-            }),
+  private initializeFirebase() {
+    // Initialize Firebase from service account file (jobmate-122bd)
+    try {
+      const serviceAccountPath = path.join(process.cwd(), 'firebase-service-account.json');
+      if (fs.existsSync(serviceAccountPath)) {
+        const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+        
+        // Check if already initialized
+        if (admin.apps.length === 0) {
+          this.firebaseApp = admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount),
           });
-          this.logger.log('✅ Firebase Admin initialized for notifications');
-        } catch (error) {
-          this.logger.warn('⚠️  Firebase Admin initialization failed:', error.message);
-          this.logger.warn('   Push notifications will not work until valid Firebase credentials are provided.');
+          this.logger.log(`✅ Firebase initialized (${serviceAccount.project_id}, senderId: 119527345940)`);
+        } else {
+          this.firebaseApp = admin.apps[0];
+          this.logger.log('✅ Firebase already initialized, reusing existing app');
         }
       } else {
-        this.logger.warn('⚠️  Firebase credentials not configured properly.');
-        this.logger.warn('   Push notifications disabled. Update FIREBASE_* variables in .env to enable.');
+        this.logger.warn('⚠️  firebase-service-account.json not found - notifications disabled');
       }
+    } catch (error) {
+      this.logger.error('❌ Firebase initialization failed:', error.message);
     }
   }
 
@@ -52,7 +47,6 @@ export class NotificationsService {
     const user = await this.db.user.findUnique({ where: { id: userId } });
     if (!user) return;
 
-    // FCM token is stored in user.notifPrefs.fcmToken
     const notifPrefs = (user.notifPrefs as any) || {};
     const fcmToken = notifPrefs.fcmToken as string | undefined;
     if (!fcmToken) {
@@ -71,7 +65,6 @@ export class NotificationsService {
     await this.db.notification.create({
       data: {
         userId,
-
         title,
         body,
         sentAt: new Date(),
@@ -85,7 +78,6 @@ export class NotificationsService {
     body: string;
     data?: any;
   }) {
-    // Enforce Australian greeting style - this is non-negotiable
     const enforcedTitle = this.enforceAustralianGreeting(notification.title);
     
     const user = await this.db.user.findUnique({ where: { id: userId } });
@@ -119,7 +111,6 @@ export class NotificationsService {
           break;
       }
 
-      // Log notification in database
       await this.db.notification.create({
         data: {
           userId,
@@ -133,7 +124,6 @@ export class NotificationsService {
     } catch (error) {
       this.logger.error(`Failed to send ${channel} notification to user ${userId}:`, error);
       
-      // Log failed notification
       await this.db.notification.create({
         data: {
           userId,
@@ -146,26 +136,25 @@ export class NotificationsService {
   }
 
   private enforceAustralianGreeting(title: string): string {
-    // Allow titles starting with "Hey mate!" or "G'day Mate" followed by punctuation
     const greetingPattern = /^(Hey mate!|G'day Mate[,!]?)\s?/i;
-    
-    // Check if title already starts with the required greeting pattern
     if (greetingPattern.test(title)) {
       return title;
     }
-    
-    // For non-compliant titles, just return as-is (don't block functionality)
     this.logger.warn(`Notification title doesn't follow Australian greeting style: "${title}"`);
     return title;
   }
 
-  // Validate greeting prefix - used for testing
   static validateGreetingPrefix(title: string): boolean {
     const greetingPattern = /^(Hey mate!|G'day Mate[,!]?)\s?/i;
     return greetingPattern.test(title);
   }
 
   private async sendPushNotification(userId: string, notification: any) {
+    if (!this.firebaseApp) {
+      this.logger.error('❌ Firebase not initialized - cannot send push notification');
+      throw new Error('Firebase not initialized');
+    }
+
     const user = await this.db.user.findUnique({ where: { id: userId } });
     if (!user) {
       this.logger.warn(`User ${userId} not found for push notification`);
@@ -176,17 +165,14 @@ export class NotificationsService {
     const fcmTokens = notifPrefs.fcmTokens || [];
     const legacyToken = notifPrefs.fcmToken;
     
-    // Collect all unique tokens
     const allTokens: { token: string; platform: string }[] = [];
     
-    // Add tokens from new array format
     for (const t of fcmTokens) {
       if (t.token && !allTokens.find(x => x.token === t.token)) {
         allTokens.push({ token: t.token, platform: t.platform || 'unknown' });
       }
     }
     
-    // Add legacy token if not already included
     if (legacyToken && !allTokens.find(x => x.token === legacyToken)) {
       allTokens.push({ token: legacyToken, platform: 'legacy' });
     }
@@ -199,11 +185,9 @@ export class NotificationsService {
     
     if (allTokens.length === 0) {
       this.logger.warn(`❌ No FCM tokens for user ${userId} - notification NOT sent`);
-      this.logger.warn(`   User needs to allow notifications in browser/app`);
       return;
     }
 
-    // FCM data must only contain string values
     const stringifiedData: Record<string, string> = {};
     if (notification.data) {
       for (const [key, value] of Object.entries(notification.data)) {
@@ -213,13 +197,12 @@ export class NotificationsService {
       }
     }
 
-    // Send to all tokens
     const invalidTokens: string[] = [];
     let successCount = 0;
     
     for (const { token, platform } of allTokens) {
       try {
-        this.logger.log(`🚀 Sending FCM to ${platform}...`);
+        this.logger.log(`🚀 Sending FCM to ${platform} via jobmate-122bd...`);
         
         const result = await admin.messaging().send({
           token,
@@ -228,7 +211,6 @@ export class NotificationsService {
             body: notification.body,
           },
           data: stringifiedData,
-          // Android-specific config
           android: {
             priority: 'high',
             notification: {
@@ -236,7 +218,6 @@ export class NotificationsService {
               clickAction: 'FLUTTER_NOTIFICATION_CLICK',
             },
           },
-          // iOS-specific config  
           apns: {
             payload: {
               aps: {
@@ -259,7 +240,6 @@ export class NotificationsService {
       }
     }
 
-    // Clean up invalid tokens
     if (invalidTokens.length > 0) {
       this.logger.warn(`🗑️ Removing ${invalidTokens.length} invalid tokens for user ${userId}`);
       const validTokens = fcmTokens.filter((t: any) => !invalidTokens.includes(t.token));
@@ -287,18 +267,13 @@ export class NotificationsService {
   }
 
   private async sendEmailNotification(userId: string, notification: any) {
-    // Email notification implementation would go here
-    // For now, just log it
     this.logger.log(`Email notification for user ${userId}: ${notification.title}`);
   }
 
   private async sendSmsNotification(userId: string, notification: any) {
-    // SMS notification implementation would go here
-    // For now, just log it
     this.logger.log(`SMS notification for user ${userId}: ${notification.title}`);
   }
 
-  // Public method for external use
   async sendPushNotificationPublic(userId: string, notification: {
     title: string;
     body: string;
@@ -307,12 +282,10 @@ export class NotificationsService {
     return this.sendNotification(userId, 'PUSH', notification);
   }
 
-  // Unit test method to verify greeting enforcement
   testGreetingEnforcement(title: string): string {
     return this.enforceAustralianGreeting(title);
   }
 
-  // Get recent notifications for a user
   async getRecentNotifications(userId: string, limit: number = 10) {
     return this.db.notification.findMany({
       where: { userId },
@@ -320,4 +293,4 @@ export class NotificationsService {
       take: limit,
     });
   }
-} 
+}

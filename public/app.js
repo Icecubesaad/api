@@ -6,13 +6,13 @@ const API_BASE = window.location.hostname === 'localhost'
 
 // Firebase Configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyBqsjyXHLtYUbzUeZ4HnsT8awjoI-BVQ8U",
-  authDomain: "jobmatee-64027.firebaseapp.com",
-  projectId: "jobmatee-64027",
-  storageBucket: "jobmatee-64027.firebasestorage.app",
-  messagingSenderId: "459203161978",
-  appId: "1:459203161978:web:a533a9afaa0819ac44f0c3",
-  measurementId: "G-G5WX61SLH6"
+  apiKey: "AIzaSyBcS21HPdSxotT7an5HcOsPs8vKzCFahqI",
+  authDomain: "jobmate-122bd.firebaseapp.com",
+  projectId: "jobmate-122bd",
+  storageBucket: "jobmate-122bd.firebasestorage.app",
+  messagingSenderId: "119527345940",
+  appId: "1:119527345940:web:7d07c3f709bf7e068e7c01",
+  measurementId: "G-GXM6EXQBS7"
 };
 
 // Get user's timezone
@@ -245,6 +245,17 @@ function showMainScreen() {
 // ============ Push Notifications ============
 async function requestNotificationPermission() {
   try {
+    // Detect browser - Opera doesn't fully support FCM
+    const isOpera = (!!window.opr && !!opr.addons) || !!window.opera || navigator.userAgent.indexOf(' OPR/') >= 0;
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    
+    if (isOpera) {
+      console.warn('⚠️ Opera browser detected - FCM push notifications have limited support');
+    }
+    if (isSafari) {
+      console.warn('⚠️ Safari browser detected - FCM push notifications may not work');
+    }
+    
     console.log('🔔 Requesting notification permission...');
     const permission = await Notification.requestPermission();
     console.log('🔔 Permission result:', permission);
@@ -281,10 +292,26 @@ async function requestNotificationPermission() {
       
       const messaging = firebase.messaging();
       console.log('🔔 Getting FCM token...');
-      const token = await messaging.getToken({ 
+      
+      // Add timeout for browsers that don't support FCM properly (like Opera)
+      const tokenPromise = messaging.getToken({ 
         serviceWorkerRegistration: registration,
         vapidKey: undefined // Uses Firebase config
       });
+      
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('FCM token request timed out - browser may not support FCM')), 10000)
+      );
+      
+      let token;
+      try {
+        token = await Promise.race([tokenPromise, timeoutPromise]);
+      } catch (tokenError) {
+        console.warn('⚠️ FCM token retrieval failed:', tokenError.message);
+        console.warn('⚠️ Push notifications may not work in this browser (Opera, Safari, etc.)');
+        showToast('Push notifications not supported in this browser', 'warning');
+        return; // Exit early, notifications won't work
+      }
       
       console.log('🔔 FCM token obtained:', token ? token.substring(0, 20) + '...' : 'NONE');
       
