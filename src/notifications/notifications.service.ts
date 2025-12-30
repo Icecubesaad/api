@@ -1,8 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
-import * as fs from 'fs';
-import * as path from 'path';
 import { templates } from './templates';
 import { DatabaseService } from '../database/database.service';
 
@@ -19,24 +17,33 @@ export class NotificationsService {
   }
 
   private initializeFirebase() {
-    // Initialize Firebase from service account file (jobmate-122bd)
+    // Initialize Firebase from environment variables
     try {
-      const serviceAccountPath = path.join(process.cwd(), 'firebase-service-account.json');
-      if (fs.existsSync(serviceAccountPath)) {
-        const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
-        
-        // Check if already initialized
-        if (admin.apps.length === 0) {
-          this.firebaseApp = admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount),
-          });
-          this.logger.log(`✅ Firebase initialized (${serviceAccount.project_id}, senderId: 119527345940)`);
-        } else {
-          this.firebaseApp = admin.apps[0];
-          this.logger.log('✅ Firebase already initialized, reusing existing app');
-        }
+      // Check if already initialized
+      if (admin.apps.length > 0) {
+        this.firebaseApp = admin.apps[0];
+        this.logger.log('✅ Firebase already initialized, reusing existing app');
+        return;
+      }
+
+      const projectId = this.config.get<string>('FIREBASE_PROJECT_ID');
+      const clientEmail = this.config.get<string>('FIREBASE_CLIENT_EMAIL');
+      const privateKey = this.config.get<string>('FIREBASE_PRIVATE_KEY');
+
+      if (projectId && clientEmail && privateKey) {
+        this.firebaseApp = admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId,
+            clientEmail,
+            privateKey: privateKey.replace(/\\n/g, '\n'),
+          }),
+        });
+        this.logger.log(`✅ Firebase initialized (${projectId})`);
       } else {
-        this.logger.warn('⚠️  firebase-service-account.json not found - notifications disabled');
+        this.logger.warn('⚠️ Missing Firebase env vars - notifications disabled');
+        this.logger.warn(`   FIREBASE_PROJECT_ID: ${projectId ? 'set' : 'missing'}`);
+        this.logger.warn(`   FIREBASE_CLIENT_EMAIL: ${clientEmail ? 'set' : 'missing'}`);
+        this.logger.warn(`   FIREBASE_PRIVATE_KEY: ${privateKey ? 'set' : 'missing'}`);
       }
     } catch (error) {
       this.logger.error('❌ Firebase initialization failed:', error.message);
