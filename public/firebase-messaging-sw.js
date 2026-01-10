@@ -1,42 +1,40 @@
 // Firebase Cloud Messaging Service Worker
-// Config is loaded from /api/firebase-config endpoint
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
 
-// Firebase config will be set by the main app via postMessage
-let firebaseInitialized = false;
-
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'FIREBASE_CONFIG' && !firebaseInitialized) {
-    firebase.initializeApp(event.data.config);
-    firebaseInitialized = true;
-    initializeMessaging();
-  }
+// Firebase web config (these are public keys, safe to expose)
+// Update these values from your Firebase Console -> Project Settings -> General -> Your apps
+firebase.initializeApp({
+  apiKey: "AIzaSyBcS21HPdSxotT7an5HcOsPs8vKzCFahqI",
+  authDomain: "jobmate-122bd.firebaseapp.com",
+  projectId: "jobmate-122bd",
+  storageBucket: "jobmate-122bd.firebasestorage.app",
+  messagingSenderId: "119527345940",
+  appId: "1:119527345940:web:7d07c3f709bf7e068e7c01"
 });
 
-function initializeMessaging() {
-  const messaging = firebase.messaging();
+const messaging = firebase.messaging();
 
-  // Handle background messages
-  messaging.onBackgroundMessage((payload) => {
-    console.log('[firebase-messaging-sw.js] Received background message:', payload);
-    
-    const notificationTitle = payload.notification?.title || 'JobMate Notification';
-    const notificationOptions = {
-      body: payload.notification?.body || 'You have a new notification',
-      icon: '/favicon.ico',
-      badge: '/favicon.ico',
-      tag: payload.data?.reminderId || 'jobmate-notification',
-      data: payload.data,
-      actions: [
-        { action: 'checkin', title: '✅ Check In' },
-        { action: 'dismiss', title: '❌ Dismiss' }
-      ]
-    };
+// Handle background messages
+messaging.onBackgroundMessage((payload) => {
+  console.log('[firebase-messaging-sw.js] Received background message:', payload);
+  
+  const notificationTitle = payload.notification?.title || 'JobMate Notification';
+  const notificationOptions = {
+    body: payload.notification?.body || 'You have a new notification',
+    icon: '/favicon.ico',
+    badge: '/favicon.ico',
+    tag: payload.data?.reminderId || 'jobmate-notification',
+    data: payload.data,
+    requireInteraction: true,
+    actions: [
+      { action: 'checkin', title: '✅ Check In' },
+      { action: 'dismiss', title: '❌ Dismiss' }
+    ]
+  };
 
-    self.registration.showNotification(notificationTitle, notificationOptions);
-  });
-}
+  return self.registration.showNotification(notificationTitle, notificationOptions);
+});
 
 // Handle notification click
 self.addEventListener('notificationclick', (event) => {
@@ -46,7 +44,6 @@ self.addEventListener('notificationclick', (event) => {
   
   const data = event.notification.data || {};
   
-  // Build URL with check-in data
   let url = '/';
   if (data.action === 'checkin' || data.type === 'reminder_checkin') {
     url = `/?checkin=true&reminderId=${data.reminderId || ''}&eventTitle=${encodeURIComponent(data.eventTitle || '')}&projectId=${data.projectId || ''}`;
