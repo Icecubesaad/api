@@ -87,9 +87,9 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api', app, document);
 
-  const port = configService.get<number>('app.port') || 3000;
-  await app.listen(port);
-  console.log(`🚀 Application is running on: http://localhost:${port}`);
+  const port = configService.get<number>('app.port') || process.env.PORT || 3000;
+  await app.listen(port, '0.0.0.0');
+  console.log(`🚀 Application is running on port: ${port}`);
   console.log(`📚 API Documentation: http://localhost:${port}/api`);
   console.log(`🔥 Firebase Test Page: http://localhost:${port}/firebase-test.html`);
 }
