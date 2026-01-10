@@ -34,29 +34,18 @@ async function main() {
   console.log('[setup-db] Generating Prisma client...');
   run('npx prisma generate');
 
-  // 3. Try to deploy migrations
+  // 3. Try to deploy migrations, if fails use db push
   console.log('[setup-db] Running migrations...');
   const migrateSuccess = run('npx prisma migrate deploy');
 
-  // 4. If migrations failed, try to resolve and retry
+  // 4. Always run db push to handle schema drift (new columns, etc.)
   if (!migrateSuccess) {
-    console.log('[setup-db] Migration failed, attempting recovery...');
-    
-    // Get failed migration name and try to resolve
-    try {
-      const output = execSync('npx prisma migrate status 2>&1', { encoding: 'utf8' });
-      const failedMatch = output.match(/`(\d+_\w+)` migration.*failed/);
-      if (failedMatch) {
-        const migrationName = failedMatch[1];
-        console.log(`[setup-db] Resolving failed migration: ${migrationName}`);
-        run(`npx prisma migrate resolve --rolled-back ${migrationName}`, true);
-        run('npx prisma migrate deploy');
-      }
-    } catch (e) {
-      // If status check fails, try db push as fallback
-      console.log('[setup-db] Falling back to db push...');
-      run('npx prisma db push --accept-data-loss', true);
-    }
+    console.log('[setup-db] Migration failed, syncing schema with db push...');
+    run('npx prisma db push --accept-data-loss');
+  } else {
+    // Even if migrations succeed, push to catch any schema drift
+    console.log('[setup-db] Checking for schema drift...');
+    run('npx prisma db push --accept-data-loss', true);
   }
 
   console.log('[setup-db] Database setup complete!');
