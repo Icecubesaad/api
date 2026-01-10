@@ -16,7 +16,7 @@
     "start:migrate:prod": "npx prisma migrate deploy && node dist/src/main.js",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "npx prisma migrate deploy && node dist/src/main.js",
+    "start:prod": "node scripts/setup-db.js && node dist/src/main.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
