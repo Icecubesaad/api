@@ -218,18 +218,39 @@ export class NotificationsService {
             body: notification.body,
           },
           data: stringifiedData,
+          // Web push configuration (for browsers)
+          webpush: {
+            notification: {
+              title: notification.title,
+              body: notification.body,
+              icon: '/favicon.ico',
+              badge: '/favicon.ico',
+              requireInteraction: true,
+              actions: [
+                { action: 'checkin', title: '✅ Check In' },
+                { action: 'dismiss', title: '❌ Dismiss' },
+              ],
+            },
+            fcmOptions: {
+              link: '/',
+            },
+          },
+          // Android configuration (for Flutter Android)
           android: {
             priority: 'high',
             notification: {
               sound: 'default',
               clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+              channelId: 'jobmate_notifications',
             },
           },
+          // iOS configuration (for Flutter iOS)
           apns: {
             payload: {
               aps: {
                 sound: 'default',
                 badge: 1,
+                'mutable-content': 1,
               },
             },
           },

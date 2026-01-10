@@ -8,6 +8,13 @@ JobMate uses Firebase for:
 - **Authentication**: Google Sign-In via Firebase Auth
 - **Push Notifications**: Firebase Cloud Messaging (FCM)
 
+## Current Configuration
+
+**Project**: jobmate-122bd  
+**Sender ID**: 119527345940  
+**Auth Domain**: jobmate-122bd.firebaseapp.com  
+**Service Account**: firebase-adminsdk-fbsvc@jobmate-122bd.iam.gserviceaccount.com
+
 ## Configuration Files
 
 ### Backend Configuration (.env)
@@ -15,34 +22,46 @@ JobMate uses Firebase for:
 The backend uses Firebase Admin SDK with service account credentials:
 
 ```env
-FIREBASE_PROJECT_ID=jobmatee-64027
-FIREBASE_CLIENT_EMAIL=firebase-adminsdk-fbsvc@jobmatee-64027.iam.gserviceaccount.com
+FIREBASE_PROJECT_ID=jobmate-122bd
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-fbsvc@jobmate-122bd.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
-FCM_SERVER_KEY=459203161978
+FCM_SERVER_KEY=119527345940
+
+# REQUIRED for web push notifications
+FIREBASE_VAPID_KEY=your-vapid-key-from-firebase-console
 ```
+
+### Getting the VAPID Key (REQUIRED for Web Push)
+
+1. Go to Firebase Console → Project Settings → Cloud Messaging
+2. Scroll to "Web Push certificates"
+3. Click "Generate key pair" if you don't have one
+4. Copy the key and add it to your `.env` as `FIREBASE_VAPID_KEY`
+
+**Without the VAPID key, browser notifications will NOT work!**
 
 ### Frontend Configuration
 
 #### 1. Firebase Test Page (`public/firebase-test.html`)
-The test page uses the Firebase client SDK with the following configuration:
-
-```javascript
-const firebaseConfig = {
-  apiKey: "AIzaSyBqsjyXHLtYUbzUeZ4HnsT8awjoI-BVQ8U",
-  authDomain: "jobmatee-64027.firebaseapp.com",
-  projectId: "jobmatee-64027",
-  storageBucket: "jobmatee-64027.firebasestorage.app",
-  messagingSenderId: "459203161978",
-  appId: "1:459203161978:web:a533a9afaa0819ac44f0c3",
-  measurementId: "G-G5WX61SLH6"
-};
-```
+The test page fetches Firebase configuration from the backend API endpoint `/notifications/firebase-config`.
+This ensures consistency between frontend and backend configurations.
 
 #### 2. Service Worker (`public/firebase-messaging-sw.js`)
 The service worker handles background push notifications with the same configuration.
 
 #### 3. TypeScript Config (`src/config/firebase.config.ts`)
 Centralized Firebase client configuration for TypeScript imports.
+
+```typescript
+export const firebaseConfig = {
+  apiKey: "AIzaSyBcS21HPdSxotT7an5HcOsPs8vKzCFahqI",
+  authDomain: "jobmate-122bd.firebaseapp.com",
+  projectId: "jobmate-122bd",
+  storageBucket: "jobmate-122bd.firebasestorage.app",
+  messagingSenderId: "119527345940",
+  appId: "1:119527345940:web:7d07c3f709bf7e068e7c01"
+};
+```
 
 ## Security
 
@@ -141,7 +160,53 @@ To get these credentials from Firebase Console:
 
 ## Current Configuration
 
-**Project**: jobmatee-64027  
-**Sender ID**: 459203161978  
-**Auth Domain**: jobmatee-64027.firebaseapp.com  
-**Service Account**: firebase-adminsdk-fbsvc@jobmatee-64027.iam.gserviceaccount.com
+**Project**: jobmate-122bd  
+**Sender ID**: 119527345940  
+**Auth Domain**: jobmate-122bd.firebaseapp.com  
+**Service Account**: firebase-adminsdk-fbsvc@jobmate-122bd.iam.gserviceaccount.com
+
+## Flutter Integration
+
+For Flutter apps to receive notifications, ensure:
+
+1. **Android**: Add `google-services.json` from Firebase Console to `android/app/`
+2. **iOS**: Add `GoogleService-Info.plist` from Firebase Console to `ios/Runner/`
+3. **Register FCM Token**: Call `POST /webhooks/fcm-token` with the FCM token after user login
+
+### Flutter FCM Token Registration
+
+```dart
+// After user authenticates, register the FCM token
+final fcmToken = await FirebaseMessaging.instance.getToken();
+final response = await http.post(
+  Uri.parse('$apiBaseUrl/webhooks/fcm-token'),
+  headers: {
+    'Authorization': 'Bearer $jwtToken',
+    'Content-Type': 'application/json',
+  },
+  body: jsonEncode({
+    'token': fcmToken,
+    'platform': Platform.isAndroid ? 'android' : 'ios',
+  }),
+);
+```
+
+### Flutter Notification Handling
+
+```dart
+// Handle foreground messages
+FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+  // Show local notification or update UI
+});
+
+// Handle background/terminated messages
+FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+// Handle notification tap
+FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+  // Navigate to relevant screen based on message.data
+  if (message.data['type'] == 'reminder_checkin') {
+    // Navigate to check-in screen
+  }
+});
+```

@@ -1218,7 +1218,7 @@ await ProfileService().updateNotificationPreferences({
 
 ## 10. Push Notifications (FCM)
 
-Register device for push notifications.
+Register device for push notifications. The backend supports multiple platforms (web, android, ios) and stores tokens per platform.
 
 ### 10.1 Register FCM Token
 **Endpoint:** `POST /webhooks/fcm-token`  
@@ -1226,6 +1226,7 @@ Register device for push notifications.
 
 ```dart
 // lib/services/notification_service.dart
+import 'dart:io';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 Future<void> registerFcmToken() async {
@@ -1243,11 +1244,12 @@ Future<void> registerFcmToken() async {
     final token = await messaging.getToken();
     
     if (token != null) {
-      // Register with backend
+      // Register with backend - include platform for multi-device support
       await ApiClient.post('/webhooks/fcm-token', {
         'token': token,
+        'platform': Platform.isAndroid ? 'android' : 'ios',
       });
-      print('FCM token registered');
+      print('FCM token registered for ${Platform.operatingSystem}');
     }
   }
 }
@@ -1257,8 +1259,23 @@ void setupTokenRefreshListener() {
   FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
     await ApiClient.post('/webhooks/fcm-token', {
       'token': newToken,
+      'platform': Platform.isAndroid ? 'android' : 'ios',
     });
   });
+}
+```
+
+### 10.2 Get Firebase Config (for initialization)
+**Endpoint:** `GET /notifications/firebase-config`  
+**Auth Required:** No
+
+```dart
+// Fetch Firebase config from backend (useful for dynamic configuration)
+Future<Map<String, dynamic>> getFirebaseConfig() async {
+  final response = await http.get(
+    Uri.parse('${ApiConfig.baseUrl}/notifications/firebase-config'),
+  );
+  return jsonDecode(response.body);
 }
 ```
 

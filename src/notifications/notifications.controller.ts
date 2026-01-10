@@ -1,5 +1,6 @@
 import { Controller, Post, Body, Get } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
 import { NotificationsService } from './notifications.service';
 import { User } from '../auth/decorators/user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
@@ -30,7 +31,32 @@ export class TestGreetingDto {
 @ApiBearerAuth()
 @Controller('notifications')
 export class NotificationsController {
-  constructor(private readonly notificationsService: NotificationsService) { }
+  constructor(
+    private readonly notificationsService: NotificationsService,
+    private readonly configService: ConfigService,
+  ) { }
+
+  @Get('firebase-config')
+  @Public()
+  @ApiOperation({
+    summary: 'Get Firebase client configuration (public)',
+    description: 'Returns Firebase config needed for client-side initialization including VAPID key for web push'
+  })
+  @ApiResponse({ status: 200, description: 'Firebase configuration returned' })
+  async getFirebaseConfig() {
+    // Return public Firebase config for client-side use
+    // These are safe to expose - they're meant to be public
+    return {
+      apiKey: this.configService.get<string>('FIREBASE_API_KEY') || 'AIzaSyBcS21HPdSxotT7an5HcOsPs8vKzCFahqI',
+      authDomain: `${this.configService.get<string>('FIREBASE_PROJECT_ID') || 'jobmate-122bd'}.firebaseapp.com`,
+      projectId: this.configService.get<string>('FIREBASE_PROJECT_ID') || 'jobmate-122bd',
+      storageBucket: `${this.configService.get<string>('FIREBASE_PROJECT_ID') || 'jobmate-122bd'}.firebasestorage.app`,
+      messagingSenderId: this.configService.get<string>('FCM_SERVER_KEY') || '119527345940',
+      appId: this.configService.get<string>('FIREBASE_APP_ID') || '1:119527345940:web:7d07c3f709bf7e068e7c01',
+      // VAPID key is required for web push notifications
+      vapidKey: this.configService.get<string>('FIREBASE_VAPID_KEY') || null,
+    };
+  }
 
   @Post('test')
   @ApiOperation({
