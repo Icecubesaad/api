@@ -6,10 +6,10 @@
   "private": true,
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": "18.x"
   },
   "scripts": {
-    "build": "npx prisma generate && npx @nestjs/cli build",
+    "build": "prisma generate && nest build",
     "postinstall": "npx prisma generate || true",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "node dist/src/main.js",
