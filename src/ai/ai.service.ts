@@ -68,6 +68,9 @@ TIMEZONE HANDLING (VERY IMPORTANT):
 CRITICAL TOOL USAGE RULES:
 1. When user asks to create a reminder, schedule, or event - IMMEDIATELY call the appropriate tool. DO NOT ask for confirmation first.
 2. When you see "[USER UPLOADED PDF FILE:" in the message - IMMEDIATELY call importScheduleFromPdf tool. This is mandatory.
+3. NEVER respond to a "create reminder" request without FIRST calling createReminder or createBulkReminders tool.
+4. Even if conversation history shows you previously said "I created a reminder" - if the user asks again, CALL THE TOOL AGAIN.
+5. Your text response should come AFTER the tool call, not instead of it.
 3. When user mentions "schedule", "create reminders", "add tasks", "process this", "import" with PDF context - IMMEDIATELY call importScheduleFromPdf.
 4. ALWAYS execute tools on the first request. Never say "I can create that for you, should I proceed?" - just DO IT.
 5. If a message contains "[USER UPLOADED PDF FILE:" - you MUST call importScheduleFromPdf, no exceptions.
@@ -111,11 +114,14 @@ PDF UPLOAD HANDLING (CRITICAL - MUST FOLLOW):
 - The tool will automatically find the uploaded PDF and create reminders
 - After calling the tool, tell the user what reminders were created
 
-REMINDER CREATION (CRITICAL):
-- For SINGLE reminder: use createReminder tool
+REMINDER CREATION (CRITICAL - MUST CALL TOOL):
+- For SINGLE reminder: use createReminder tool - YOU MUST CALL THE TOOL, NOT JUST RESPOND
 - For MULTIPLE reminders (2 or more): ALWAYS use createBulkReminders tool
 - Parse the date/time from user's message and create reminders right away
 - ALWAYS use the current year - NEVER use 2022, 2023, or 2024
+- NEVER respond saying you created a reminder without actually calling createReminder or createBulkReminders
+- If you see "create reminder", "remind me", "set a reminder" - CALL THE TOOL FIRST, then respond
+- DO NOT assume a reminder was created just because you said so in a previous message - ALWAYS call the tool
 
 BULK REMINDERS (VERY IMPORTANT - READ CAREFULLY):
 - If user message contains MORE THAN ONE task/reminder/event, you MUST use createBulkReminders
@@ -271,6 +277,7 @@ When confirming to user, show the EXACT time they requested in their local timez
       let confirmationMessage = '';
 
       if (response.message.tool_calls) {
+        this.logger.log(`AI called ${response.message.tool_calls.length} tool(s): ${response.message.tool_calls.map(t => t.function.name).join(', ')}`);
         const results = await this.executeToolCalls(
           response.message.tool_calls,
           userId,
@@ -282,6 +289,41 @@ When confirming to user, show the EXACT time they requested in their local timez
         
         // Generate confirmation message based on tool results (pass timezone for correct time display)
         confirmationMessage = this.generateConfirmationMessage(toolResults, createdEntities, chatRequest.timezone);
+      } else {
+        // Check if AI should have called a tool but didn't
+        const lastUserMessage = chatRequest.messages[chatRequest.messages.length - 1]?.content || '';
+        const shouldCreateReminder = /\b(remind|reminder|set.*reminder|create.*reminder)\b/i.test(lastUserMessage);
+        
+        if (shouldCreateReminder) {
+          this.logger.warn(`AI did NOT call createReminder tool for message: "${lastUserMessage.substring(0, 100)}..." - retrying with forced tool call`);
+          
+          // Retry with tool_choice set to force tool calling
+          const retryCompletion = await this.openai.chat.completions.create({
+            model: 'gpt-4',
+            messages: [
+              ...messages,
+              { role: 'system', content: 'CRITICAL: You MUST call the createReminder tool NOW. Do not respond with text only. Call the tool first.' }
+            ],
+            tools: tools.length > 0 ? tools : undefined,
+            tool_choice: { type: 'function', function: { name: 'createReminder' } },
+            temperature: 0.1,
+            max_tokens: 1500,
+          });
+          
+          const retryResponse = retryCompletion.choices[0];
+          if (retryResponse.message.tool_calls) {
+            this.logger.log(`Retry successful - AI called ${retryResponse.message.tool_calls.length} tool(s)`);
+            const results = await this.executeToolCalls(
+              retryResponse.message.tool_calls,
+              userId,
+              chatRequest.projectId,
+              chatRequest.timezone,
+            );
+            toolResults = results.toolResults;
+            createdEntities = results.createdEntities;
+            confirmationMessage = this.generateConfirmationMessage(toolResults, createdEntities, chatRequest.timezone);
+          }
+        }
       }
 
       // Use GPT's message if available, otherwise use our confirmation message
@@ -438,13 +480,13 @@ When confirming to user, show the EXACT time they requested in their local timez
         type: 'function' as const,
         function: {
           name: 'createReminder',
-          description: 'Create a reminder for the user. IMPORTANT: When user specifies a time like "11:08 PM", use their LOCAL time directly. For example, if user says "11:08 PM today" on 2025-12-24, use dueAt="2025-12-24T23:08:00" (no Z suffix, treat as local time).',
+          description: 'Create a reminder for the user. IMPORTANT: Always use ISO format YYYY-MM-DDTHH:mm:ss for dueAt. When user specifies a time like "7:20 PM today", calculate the full date and use format like "2026-01-16T19:20:00" (no Z suffix, treat as local time).',
           parameters: {
             type: 'object',
             properties: {
               projectId: { type: 'string', description: 'Project ID this reminder belongs to (optional - will use default project if not provided)' },
               title: { type: 'string', description: 'Reminder title' },
-              dueAt: { type: 'string', description: 'Due date/time. Use format YYYY-MM-DDTHH:mm:ss WITHOUT the Z suffix. This represents the time in the user\'s local timezone.' },
+              dueAt: { type: 'string', description: 'Due date/time. MUST use format YYYY-MM-DDTHH:mm:ss (e.g., "2026-01-16T19:20:00"). Do NOT use formats like "7:20pm" or "today 7:20pm". Always include the full date.' },
               recurrence: { type: 'string', description: 'Recurrence pattern: daily, weekly, monthly' },
             },
             required: ['title', 'dueAt'],
@@ -872,9 +914,16 @@ When confirming to user, show the EXACT time they requested in their local timez
         
         this.logger.log(`Reminder timezone conversion: input=${dueAtStr}, timezone=${userTimezone}, UTC=${dueAtDate.toISOString()}`);
       } else {
-        // Fallback: just parse as-is
-        dueAtDate = new Date(dueAtStr);
-        this.logger.warn(`Could not parse reminder date format: ${dueAtStr}, using as-is`);
+        // Fallback: try to parse as-is, but validate first
+        const parsed = new Date(dueAtStr);
+        if (isNaN(parsed.getTime())) {
+          // Invalid date - log error and use a default (1 hour from now)
+          this.logger.error(`Invalid reminder date format: ${dueAtStr}, defaulting to 1 hour from now`);
+          dueAtDate = new Date(Date.now() + 60 * 60 * 1000);
+        } else {
+          dueAtDate = parsed;
+          this.logger.warn(`Could not parse reminder date format: ${dueAtStr}, using as-is`);
+        }
       }
     }
     
