@@ -14,8 +14,14 @@ export class ReminderResponseDto {
   @ApiProperty({ description: 'Reminder title' })
   title: string;
 
-  @ApiProperty({ description: 'Due date/time' })
+  @ApiProperty({ description: 'Due date/time (UTC ISO string)' })
   dueAt: Date;
+
+  @ApiPropertyOptional({ description: 'Due date/time formatted in user timezone' })
+  dueAtFormatted?: string;
+
+  @ApiPropertyOptional({ description: 'User timezone used for formatting' })
+  timezone?: string;
 
   @ApiProperty({ description: 'Reminder status', enum: ReminderStatus })
   status: ReminderStatus;

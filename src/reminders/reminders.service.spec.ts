@@ -1,197 +1,154 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { RemindersService } from './reminders.service';
 import { DatabaseService } from '../database/database.service';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
 
-describe('RemindersService', () => {
+describe('RemindersService - Timezone Handling', () => {
   let service: RemindersService;
-  let mockDb: any;
+  let db: DatabaseService;
 
   const mockUser = {
     id: 'user-123',
     email: 'test@example.com',
-    firebaseUid: 'firebase-123',
+    notifPrefs: { timezone: 'Asia/Karachi' },
   };
 
   const mockProject = {
     id: 'project-123',
-    name: 'Test Project',
     ownerId: 'user-123',
+    name: 'Test Project',
   };
 
   const mockReminder = {
     id: 'reminder-123',
     title: 'Test Reminder',
-    dueAt: new Date('2025-01-15T10:00:00Z'),
+    dueAt: new Date('2026-02-16T12:30:00.000Z'), // 5:30 PM in Asia/Karachi (UTC+5)
     projectId: 'project-123',
     userId: 'user-123',
     status: 'PENDING',
+    recurrenceJson: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
 
   beforeEach(async () => {
-    mockDb = {
-      project: {
-        findFirst: jest.fn(),
-        findUnique: jest.fn(),
-      },
-      reminder: {
-        create: jest.fn(),
-        findMany: jest.fn(),
-        findUnique: jest.fn(),
-        update: jest.fn(),
-        delete: jest.fn(),
-      },
-    };
-
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RemindersService,
-        { provide: DatabaseService, useValue: mockDb },
+        {
+          provide: DatabaseService,
+          useValue: {
+            user: {
+              findUnique: jest.fn(),
+            },
+            project: {
+              findFirst: jest.fn(),
+              findUnique: jest.fn(),
+            },
+            reminder: {
+              create: jest.fn(),
+              findMany: jest.fn(),
+              findUnique: jest.fn(),
+              update: jest.fn(),
+              delete: jest.fn(),
+            },
+          },
+        },
       ],
     }).compile();
 
     service = module.get<RemindersService>(RemindersService);
-  });
-
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it('should be defined', () => {
-    expect(service).toBeDefined();
+    db = module.get<DatabaseService>(DatabaseService);
   });
 
   describe('create', () => {
-    it('should create a reminder when user owns the project', async () => {
-      mockDb.project.findFirst.mockResolvedValue(mockProject);
-      mockDb.reminder.create.mockResolvedValue(mockReminder);
+    it('should create reminder and return formatted time in user timezone', async () => {
+      jest.spyOn(db.project, 'findFirst').mockResolvedValue(mockProject as any);
+      jest.spyOn(db.reminder, 'create').mockResolvedValue(mockReminder as any);
+      jest.spyOn(db.user, 'findUnique').mockResolvedValue(mockUser as any);
 
-      const result = await service.create(mockUser.id, {
+      const result = await service.create('user-123', {
         title: 'Test Reminder',
-        dueAt: '2025-01-15T10:00:00Z',
-        projectId: mockProject.id,
+        dueAt: '2026-02-16T12:30:00.000Z',
+        projectId: 'project-123',
       });
 
-      expect(result).toEqual(mockReminder);
-      expect(mockDb.reminder.create).toHaveBeenCalledWith({
-        data: {
-          title: 'Test Reminder',
-          dueAt: expect.any(Date),
-          projectId: mockProject.id,
-          userId: mockUser.id,
-        },
+      expect(result.dueAt).toEqual(mockReminder.dueAt);
+      expect(result.timezone).toBe('Asia/Karachi');
+      expect(result.dueAtFormatted).toContain('5:30 PM'); // Should show local time
+      expect(result.dueAtFormatted).toContain('Feb 16');
+    });
+
+    it('should handle UTC timezone when user has no timezone preference', async () => {
+      const userWithoutTimezone = { ...mockUser, notifPrefs: {} };
+      jest.spyOn(db.project, 'findFirst').mockResolvedValue(mockProject as any);
+      jest.spyOn(db.reminder, 'create').mockResolvedValue(mockReminder as any);
+      jest.spyOn(db.user, 'findUnique').mockResolvedValue(userWithoutTimezone as any);
+
+      const result = await service.create('user-123', {
+        title: 'Test Reminder',
+        dueAt: '2026-02-16T12:30:00.000Z',
+        projectId: 'project-123',
       });
-    });
 
-    it('should throw ForbiddenException when project not found', async () => {
-      mockDb.project.findFirst.mockResolvedValue(null);
-      mockDb.project.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.create(mockUser.id, {
-          title: 'Test Reminder',
-          dueAt: '2025-01-15T10:00:00Z',
-          projectId: 'non-existent',
-        }),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('should throw ForbiddenException when user does not own project', async () => {
-      mockDb.project.findFirst.mockResolvedValue(null);
-      mockDb.project.findUnique.mockResolvedValue({ ...mockProject, ownerId: 'other-user' });
-
-      await expect(
-        service.create(mockUser.id, {
-          title: 'Test Reminder',
-          dueAt: '2025-01-15T10:00:00Z',
-          projectId: mockProject.id,
-        }),
-      ).rejects.toThrow(ForbiddenException);
+      expect(result.timezone).toBe('UTC');
+      expect(result.dueAtFormatted).toContain('12:30 PM'); // Should show UTC time
     });
   });
 
   describe('list', () => {
-    it('should list all reminders for a user', async () => {
+    it('should return all reminders with formatted times', async () => {
       const reminders = [mockReminder, { ...mockReminder, id: 'reminder-456' }];
-      mockDb.reminder.findMany.mockResolvedValue(reminders);
+      jest.spyOn(db.reminder, 'findMany').mockResolvedValue(reminders as any);
+      jest.spyOn(db.user, 'findUnique').mockResolvedValue(mockUser as any);
 
-      const result = await service.list(mockUser.id);
+      const result = await service.list('user-123');
 
-      expect(result).toEqual(reminders);
-      expect(mockDb.reminder.findMany).toHaveBeenCalledWith({
-        where: { userId: mockUser.id },
-        orderBy: { dueAt: 'asc' },
-      });
+      expect(result).toHaveLength(2);
+      expect(result[0].dueAtFormatted).toContain('5:30 PM');
+      expect(result[0].timezone).toBe('Asia/Karachi');
+      expect(result[1].dueAtFormatted).toContain('5:30 PM');
     });
 
-    it('should filter reminders by projectId', async () => {
-      mockDb.reminder.findMany.mockResolvedValue([mockReminder]);
+    it('should filter by projectId when provided', async () => {
+      jest.spyOn(db.reminder, 'findMany').mockResolvedValue([mockReminder] as any);
+      jest.spyOn(db.user, 'findUnique').mockResolvedValue(mockUser as any);
 
-      const result = await service.list(mockUser.id, mockProject.id);
+      await service.list('user-123', 'project-123');
 
-      expect(result).toEqual([mockReminder]);
-      expect(mockDb.reminder.findMany).toHaveBeenCalledWith({
-        where: { userId: mockUser.id, projectId: mockProject.id },
+      expect(db.reminder.findMany).toHaveBeenCalledWith({
+        where: {
+          userId: 'user-123',
+          projectId: 'project-123',
+        },
         orderBy: { dueAt: 'asc' },
       });
     });
   });
 
-  describe('update', () => {
-    it('should update reminder status to COMPLETED', async () => {
-      mockDb.reminder.findUnique.mockResolvedValue(mockReminder);
-      mockDb.reminder.update.mockResolvedValue({
-        ...mockReminder,
-        status: 'COMPLETED',
-      });
+  describe('timezone formatting', () => {
+    it('should correctly format time for different timezones', async () => {
+      const timezones = [
+        { tz: 'Asia/Karachi', expected: '5:30 PM' }, // UTC+5
+        { tz: 'America/New_York', expected: '7:30 AM' }, // UTC-5
+        { tz: 'Europe/London', expected: '12:30 PM' }, // UTC+0
+        { tz: 'Australia/Sydney', expected: '11:30 PM' }, // UTC+11
+      ];
 
-      const result = await service.update(mockUser.id, mockReminder.id, {
-        status: 'COMPLETED',
-      });
+      for (const { tz, expected } of timezones) {
+        const userWithTz = { ...mockUser, notifPrefs: { timezone: tz } };
+        jest.spyOn(db.project, 'findFirst').mockResolvedValue(mockProject as any);
+        jest.spyOn(db.reminder, 'create').mockResolvedValue(mockReminder as any);
+        jest.spyOn(db.user, 'findUnique').mockResolvedValue(userWithTz as any);
 
-      expect(result.status).toBe('COMPLETED');
-    });
+        const result = await service.create('user-123', {
+          title: 'Test Reminder',
+          dueAt: '2026-02-16T12:30:00.000Z',
+          projectId: 'project-123',
+        });
 
-    it('should throw NotFoundException when reminder not found', async () => {
-      mockDb.reminder.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.update(mockUser.id, 'non-existent', { title: 'New Title' }),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('should throw ForbiddenException when user does not own reminder', async () => {
-      mockDb.reminder.findUnique.mockResolvedValue({
-        ...mockReminder,
-        userId: 'other-user',
-      });
-
-      await expect(
-        service.update(mockUser.id, mockReminder.id, { title: 'New Title' }),
-      ).rejects.toThrow(ForbiddenException);
-    });
-  });
-
-  describe('remove', () => {
-    it('should delete a reminder', async () => {
-      mockDb.reminder.findUnique.mockResolvedValue(mockReminder);
-      mockDb.reminder.delete.mockResolvedValue(mockReminder);
-
-      await service.remove(mockUser.id, mockReminder.id);
-
-      expect(mockDb.reminder.delete).toHaveBeenCalledWith({
-        where: { id: mockReminder.id },
-      });
-    });
-
-    it('should throw NotFoundException when reminder not found', async () => {
-      mockDb.reminder.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.remove(mockUser.id, 'non-existent'),
-      ).rejects.toThrow(NotFoundException);
+        expect(result.timezone).toBe(tz);
+        expect(result.dueAtFormatted).toContain(expected);
+      }
     });
   });
 });

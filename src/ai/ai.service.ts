@@ -222,6 +222,26 @@ When confirming to user, show the EXACT time they requested in their local timez
         this.logger.log(`Message ${index}: ${msg.role} - ${msg.content.substring(0, 100)}...`);
       });
 
+      // Save user's timezone to their profile if provided
+      if (chatRequest.timezone) {
+        const user = await this.db.user.findUnique({ where: { id: userId } });
+        if (user) {
+          const notifPrefs = (user.notifPrefs as any) || {};
+          if (notifPrefs.timezone !== chatRequest.timezone) {
+            await this.db.user.update({
+              where: { id: userId },
+              data: {
+                notifPrefs: {
+                  ...notifPrefs,
+                  timezone: chatRequest.timezone,
+                },
+              },
+            });
+            this.logger.log(`Updated user ${userId} timezone to ${chatRequest.timezone}`);
+          }
+        }
+      }
+
 
 
       // Get RAG context if projectId is provided

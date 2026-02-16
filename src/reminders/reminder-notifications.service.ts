@@ -133,7 +133,9 @@ export class ReminderNotificationsService {
    */
   private getUserTimezone(user: any): string {
     const notifPrefs = (user?.notifPrefs as any) || {};
-    return notifPrefs.timezone || 'Australia/Sydney';
+    const timezone = notifPrefs.timezone || 'Australia/Sydney';
+    this.logger.debug(`User ${user?.id} timezone: ${timezone} (from notifPrefs: ${JSON.stringify(notifPrefs)})`);
+    return timezone;
   }
 
   /**
@@ -161,6 +163,8 @@ export class ReminderNotificationsService {
       const dueAt = new Date(reminder.dueAt);
       const minutesUntilDue = Math.max(0, Math.round((dueAt.getTime() - now.getTime()) / (60 * 1000)));
       const dueTimeFormatted = this.formatTimeInUserTimezone(dueAt, userTimezone);
+
+      this.logger.log(`Formatting reminder time: UTC=${dueAt.toISOString()}, timezone=${userTimezone}, formatted=${dueTimeFormatted}`);
 
       const { title, body } = await this.generateCheckinMessage(
         eventTitle, 
