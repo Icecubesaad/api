@@ -8,6 +8,51 @@ import { Project, Prisma } from '@prisma/client';
 export class ProjectsService {
   constructor(private db: DatabaseService) {}
 
+  /**
+   * Convert reminder times from UTC to user's local timezone
+   */
+  private convertReminderTimesToLocal(reminders: any[], timezone: string) {
+    return reminders.map(reminder => {
+      // Calculate the local time by applying timezone offset
+      const utcDate = new Date(reminder.dueAt);
+      
+      // Get the local time string in the user's timezone
+      const localTimeStr = utcDate.toLocaleString('en-US', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      });
+      
+      // Parse the local time string to create ISO format
+      const [datePart, timePart] = localTimeStr.split(', ');
+      const [month, day, year] = datePart.split('/');
+      const [hour, minute, second] = timePart.split(':');
+      
+      // Create ISO string in local timezone (without Z suffix)
+      const dueAtLocal = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hour}:${minute}:${second}`;
+      
+      return {
+        ...reminder,
+        dueAtLocal, // Local time in ISO format
+        dueAtUTC: reminder.dueAt, // Keep original UTC for reference
+      };
+    });
+  }
+
+  /**
+   * Get user's timezone from preferences
+   */
+  private async getUserTimezone(userId: string): Promise<string> {
+    const user = await this.db.user.findUnique({ where: { id: userId } });
+    const notifPrefs = (user?.notifPrefs as any) || {};
+    return notifPrefs.timezone || 'UTC';
+  }
+
   async create(createProjectDto: CreateProjectDto, firebaseUid: string): Promise<Project> {
     console.log("🔧 Projects Service - Create called with:", createProjectDto, firebaseUid);
     console.log("🔍 Looking for user with firebaseUid:", firebaseUid);
@@ -37,7 +82,7 @@ export class ProjectsService {
     });
   }
 
-  async findAll(firebaseUid: string): Promise<Project[]> {
+  async findAll(firebaseUid: string): Promise<any[]> {
     const user = await this.db.user.findUnique({
       where: { firebaseUid }
     });
@@ -46,7 +91,9 @@ export class ProjectsService {
       throw new NotFoundException('User not found');
     }
 
-    return this.db.project.findMany({
+    const timezone = await this.getUserTimezone(user.id);
+
+    const projects = await this.db.project.findMany({
       where: {
         ownerId: user.id,
         archivedAt: null,
@@ -68,9 +115,15 @@ export class ProjectsService {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    // Convert reminder times to local timezone
+    return projects.map(project => ({
+      ...project,
+      reminders: this.convertReminderTimesToLocal(project.reminders, timezone),
+    }));
   }
 
-  async findOne(id: string, firebaseUid: string): Promise<Project> {
+  async findOne(id: string, firebaseUid: string): Promise<any> {
     const user = await this.db.user.findUnique({
       where: { firebaseUid }
     });
@@ -78,6 +131,8 @@ export class ProjectsService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+
+    const timezone = await this.getUserTimezone(user.id);
 
     const project = await this.db.project.findFirst({
       where: {
@@ -102,7 +157,11 @@ export class ProjectsService {
       throw new NotFoundException(`Project with ID ${id} not found`);
     }
 
-    return project;
+    // Convert reminder times to local timezone
+    return {
+      ...project,
+      reminders: this.convertReminderTimesToLocal(project.reminders, timezone),
+    };
   }
 
   async update(id: string, updateProjectDto: UpdateProjectDto, firebaseUid: string): Promise<Project> {
