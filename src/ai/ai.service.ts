@@ -959,7 +959,23 @@ When confirming to user, show the EXACT time they requested in their local timez
 
     this.logger.log(`Created reminder: "${data.title}" due at ${dueAtDate.toISOString()} (user timezone: ${userTimezone})`);
 
-    return { reminderId: reminder.id, ...reminder };
+    // Format the time for display in user's timezone
+    const dueAtFormatted = dueAtDate.toLocaleString('en-US', {
+      timeZone: userTimezone,
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+
+    return { 
+      reminderId: reminder.id, 
+      ...reminder,
+      dueAtFormatted,
+      timezone: userTimezone,
+    };
   }
 
   private async getOrCreateDefaultProject(userId: string): Promise<string> {
@@ -1638,19 +1654,22 @@ Return format: [{"title": "Event Title", "startsAt": "2024-01-01T10:00:00Z", "en
           },
         });
 
+        const dueAtFormatted = dueAtDate.toLocaleString('en-US', {
+          timeZone: userTimezone,
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+        });
+
         createdReminders.push({
           id: reminder.id,
           title: reminder.title,
           dueAt: reminder.dueAt.toISOString(),
-          dueAtLocal: reminder.dueAt.toLocaleString('en-AU', {
-            timeZone: userTimezone,
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric',
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true,
-          }),
+          dueAtFormatted,
+          timezone: userTimezone,
         });
       } catch (error) {
         this.logger.error(`Failed to create reminder "${reminderData.title}":`, error);
