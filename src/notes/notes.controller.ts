@@ -5,7 +5,7 @@ import { NotesService } from './notes.service';
 import { CreateNoteDto, ListNotesQueryDto } from './dto/create-note.dto';
 import { NoteResponseDto, VoiceNoteResponseDto } from './dto/note-response.dto';
 import { User } from '../auth/decorators/user.decorator';
-import OpenAI from 'openai';
+import OpenAI, { toFile } from 'openai';
 import { ConfigService } from '@nestjs/config';
 
 @ApiTags('notes')
@@ -89,8 +89,9 @@ export class NotesController {
       }
 
       // Transcribe audio using OpenAI Whisper
+      // Use toFile helper from OpenAI SDK to convert Buffer to File
       const transcription = await this.openai.audio.transcriptions.create({
-        file: new File([new Uint8Array(file.buffer)], file.originalname, { type: file.mimetype }),
+        file: await toFile(file.buffer, file.originalname, { type: file.mimetype }),
         model: 'whisper-1',
         language: 'en', // You can make this configurable
       });
